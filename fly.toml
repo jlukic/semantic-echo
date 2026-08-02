@@ -17,6 +17,17 @@ primary_region = 'iad'
   [[services.ports]]
     port = 4433
 
+# the same endpoint on the default port, for clients that may only ever dial 443
+[[services]]
+  protocol = 'udp'
+  internal_port = 443
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 443
+
 # the probe page, on plain https with no port in the URL. raw TCP passthrough
 # with no handlers on purpose: the app terminates TLS itself with the Let's
 # Encrypt chain, and the same chain has to be what the WT port serves

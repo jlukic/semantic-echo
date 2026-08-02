@@ -185,47 +185,61 @@ func main() {
 		return nil, nil
 	}
 
-	server := &webtransport.Server{
-		H3: &http3.Server{
-			Addr:      fmt.Sprintf("%s:%d", *bindHost, *port),
-			TLSConfig: tlsConf,
-			QUICConfig: &quic.Config{
-				Tracer: qlog.DefaultConnectionTracer,
+	// one server and one mux per port. Upgrade is a method on a specific
+	// webtransport.Server, so the two ports cannot share a handler — the
+	// default mux would route both to whichever server registered last
+	startWT := func(port int) {
+		server := &webtransport.Server{
+			H3: &http3.Server{
+				Addr:      fmt.Sprintf("%s:%d", *bindHost, port),
+				TLSConfig: tlsConf,
+				QUICConfig: &quic.Config{
+					Tracer: qlog.DefaultConnectionTracer,
+				},
 			},
-		},
-		// the page origin is :pageport, the WT origin :port — different origins
-		CheckOrigin: func(*http.Request) bool { return true },
-	}
-
-	http.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("connect  origin=%q wt-available-protocols=%q", r.Header.Get("Origin"), r.Header.Get("Wt-Available-Protocols"))
-		session, err := server.Upgrade(w, r)
-		if err != nil {
-			log.Printf("upgrade REFUSED: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+			// the page and the endpoint are always different origins
+			CheckOrigin: func(*http.Request) bool { return true },
 		}
-		log.Printf("session  accepted remote=%s", r.RemoteAddr)
-		ctx := context.Background()
-		go func() {
-			for {
-				data, err := session.ReceiveDatagram(ctx)
-				if err != nil {
-					return
+		mux := http.NewServeMux()
+		mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("connect  port=%d origin=%q wt-available-protocols=%q", port, r.Header.Get("Origin"), r.Header.Get("Wt-Available-Protocols"))
+			session, err := server.Upgrade(w, r)
+			if err != nil {
+				log.Printf("upgrade REFUSED: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			log.Printf("session  accepted port=%d remote=%s", port, r.RemoteAddr)
+			ctx := context.Background()
+			go func() {
+				for {
+					data, err := session.ReceiveDatagram(ctx)
+					if err != nil {
+						return
+					}
+					session.SendDatagram(data)
 				}
-				session.SendDatagram(data)
+			}()
+			go func() {
+				for {
+					stream, err := session.AcceptStream(ctx)
+					if err != nil {
+						return
+					}
+					go io.Copy(stream, stream)
+				}
+			}()
+		})
+		server.H3.Handler = mux
+
+		go func() {
+			// one port failing to bind must not take the other down: 443 needs
+			// root, which the container has and a dev machine usually does not
+			if err := server.ListenAndServe(); err != nil {
+				log.Printf("wt :%d stopped: %v", port, err)
 			}
 		}()
-		go func() {
-			for {
-				stream, err := session.AcceptStream(ctx)
-				if err != nil {
-					return
-				}
-				go io.Copy(stream, stream)
-			}
-		}()
-	})
+	}
 
 	page := &http.Server{
 		Addr:      fmt.Sprintf(":%d", *pagePort),
@@ -254,13 +268,16 @@ func main() {
 	}
 	go func() { log.Fatal(caServer.ListenAndServe()) }()
 
-	log.Printf("wt-lab boot wt=:%d page=:%d qlog=%s", *port, *pagePort, *qlogDir)
+	log.Printf("wt-lab boot wt=:%d,:443 page=:%d qlog=%s", *port, *pagePort, *qlogDir)
 	log.Printf("certHash=%s notAfter=%s sans=%v keyUsage=DigitalSignature isCA=false", hash, time.Now().Add(10*24*time.Hour).Format(time.RFC3339), hosts)
 	log.Printf("one-time iPad setup: http://<host-lan-ip>:%d/ downloads the CA profile — install in Settings, then enable full trust in General > About > Certificate Trust Settings", *pagePort+1)
 	log.Printf("tap: https://<host-lan-ip>:%d/", *pagePort)
 
-	go func() { log.Fatal(page.ListenAndServeTLS("", "")) }()
-	log.Fatal(server.ListenAndServe())
+	startWT(*port)
+	// clients that only ever try the default port are a live hypothesis, so
+	// the endpoint answers on 443/udp too
+	startWT(443)
+	log.Fatal(page.ListenAndServeTLS("", ""))
 }
 
 func splitComma(s string) []string {

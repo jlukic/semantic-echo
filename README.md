@@ -16,6 +16,7 @@ against this, the client is the variable.
 |---|---|
 | Probe page | <https://echo.semantic-ui.com/> |
 | WebTransport endpoint | `https://echo.semantic-ui.com:4433/echo` |
+| …also on the default port | `https://echo.semantic-ui.com/echo` (443/udp) |
 | Certificate | Let's Encrypt, served on both ports, no `serverCertificateHashes` |
 
 The page sweeps `WebTransport` constructor options via query params, one preset
@@ -24,8 +25,10 @@ per link, and logs every stage with millisecond stamps. Presets cover
 anticipated-stream counts. `?url=` retargets it at another server, which makes
 the page a portable client harness rather than a fixture for this host alone.
 
-The endpoint echoes datagrams and bidirectional streams straight back. Each
-connection writes a qlog to `/tmp/qlog` on the machine.
+The endpoint echoes datagrams and bidirectional streams straight back, and
+answers identically on 4433/udp and 443/udp — a client that dials only the
+default port still finds it. Each connection writes a qlog to `/tmp/qlog` on
+the machine.
 
 ## Running locally
 
