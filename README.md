@@ -23,8 +23,10 @@ another has named its requirement rather than merely failed.
 | …the same server on the default port | `https://echo.semantic-ui.com/echo` (443/udp) |
 | webtransport-go v0.11.0 on quic-go v0.60.0 | `https://echo.semantic-ui.com:4436/echo` |
 | …the same server, self-signed leaf, pinned | `https://echo.semantic-ui.com:4437/echo` |
+| …and again with `CertSign` on that leaf | `https://echo.semantic-ui.com:4439/echo` |
+| …and again on the port the lane uses | `https://echo.semantic-ui.com:6443/echo` |
 | rust `wtransport` over quinn | `https://echo.semantic-ui.com:4438/echo` |
-| Certificate | Let's Encrypt everywhere except 4437 |
+| Certificate | Let's Encrypt except on 4437, 4439 and 6443 |
 
 Pinning the older library pins its whole wire image, QUIC transport parameters
 as well as h3 SETTINGS, which reproducing the SETTINGS alone on a newer core
@@ -35,12 +37,21 @@ omits, which draft-13 makes mandatory whenever `WT_MAX_SESSIONS` exceeds 1.
 The Rust rung shares no code with either Go server, so it separates "this client
 dislikes quic-go" from "this client dislikes WebTransport".
 
-Ports 4436 and 4437 are one listener function called twice, differing only in
-the certificate handed to it: 4436 serves the real chain, 4437 serves a
-self-signed P-256 leaf minted at boot and pinned by hash. Their SETTINGS are
-byte-identical, so a client that binds 4436 and refuses 4437 has isolated
-`serverCertificateHashes` itself as the blocker, with nothing else to blame.
-The leaf lives ten days, inside the fourteen-day ceiling pinning allows.
+Ports 4436, 4437, 4439 and 6443 are one listener function called four times.
+Everything above the certificate is shared code, so their SETTINGS come out
+byte-identical and each port moves exactly one thing:
+
+- **4436** serves the real Let's Encrypt chain, unpinned.
+- **4437** serves a self-signed P-256 leaf, pinned by hash. Against 4436 it
+  isolates `serverCertificateHashes`.
+- **4439** serves a leaf identical to 4437's except that its `KeyUsage` also
+  carries `CertSign` (`0x21`, still not a CA). Against 4437 it isolates leaf
+  shape, and it answers whether a policy layer above TLS rejects such leaves.
+- **6443** serves 4437's leaf unchanged, on a different port number. Against
+  4437 it isolates the port itself.
+
+The self-signed leaves live ten days, inside the fourteen-day ceiling pinning
+allows, and are minted fresh on every boot.
 
 The page sweeps `WebTransport` constructor options via query params, one preset
 per link, and logs every stage with millisecond stamps. Presets cover
@@ -48,8 +59,8 @@ per link, and logs every stage with millisecond stamps. Presets cover
 anticipated-stream counts, and one link per rung. `?url=` retargets it at any
 other server, which makes the page a portable client harness rather than a
 fixture for this host alone. `?hashport=N` pins the leaf that the listener on
-port N published, which is how the 4437 tap gets its hash; without it a tap runs
-pure PKI validation.
+port N published, which is how the pinned taps get their hashes; without it a tap
+runs pure PKI validation.
 
 Datagram plumbing is feature-detected. Safari exposes the streams as
 `createWritable()` / `createReadable()` factories rather than the `writable` and
@@ -59,8 +70,9 @@ still reports its session as established instead of throwing.
 Every endpoint echoes datagrams and bidirectional streams straight back. The Go
 servers write a qlog per connection under `/tmp/qlog` and `/tmp/qlog-legacy`;
 all three log session requests to stdout, so `flyctl logs` separates them by
-their `legacy`, `pinned` and `rust` prefixes. The pinned listener publishes its
-leaf hash to `/tmp/hash4437`, which the page server hands back at `/hash4437`.
+their `legacy`, `pinned`, `certsign`, `altport` and `rust` prefixes. Each pinned
+listener publishes its leaf hash to `/tmp/hash<port>`, which the page server
+hands back at `/hash<port>`.
 
 ## Running locally
 
@@ -88,8 +100,9 @@ cd legacy && go build -o wt-legacy . && ./wt-legacy -cert fullchain.pem -key pri
 cd rust   && cargo build --release && ./target/release/wt-rust "" 4438
 ```
 
-`wt-legacy` raises both 4436 and its pinned twin on 4437, and writes the pinned
-leaf hash into `-hashdir` (`/tmp` by default) for the page server to serve.
+`wt-legacy` raises all four of its ports at once and writes each pinned leaf
+hash into `-hashdir` (`/tmp` by default) for the page server to serve. Ports are
+settable with `-port`, `-pinnedport`, `-certsignport` and `-altport`.
 `wt-rust` takes its bind host and port as positional arguments; an empty host
 means all interfaces, and it reads `/cert.pem` and `/key.pem`.
 
