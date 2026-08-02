@@ -475,10 +475,14 @@ func main() {
 				// what every listener here saw from this address just now. the
 				// window is short because the page asks immediately after an
 				// attempt and stale rows would read as this one
+				address := clientAddress(r)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Cache-Control", "no-store")
 				json.NewEncoder(w).Encode(map[string]any{
-					"events": readObservations(*hashDir, clientAddress(r), 30*time.Second),
+					// echoed back so the page can say which address it asked
+					// about, and so a mismatch is legible rather than silent
+					"address": address,
+					"events":  readObservations(*hashDir, address, 30*time.Second),
 				})
 				return
 			}
@@ -536,7 +540,15 @@ func main() {
 		MaxIncomingUniStreams: 1 << 60,
 		MaxIncomingData:       1 << 60,
 	})
-	log.Fatal(page.ListenAndServeTLS("", ""))
+	// wrapped so a PROXY header, when Fly is configured to send one, restores the
+	// client's own address. without it the page server only ever sees the proxy,
+	// and the observation lookup cannot match a session to the page that asked
+	// about it
+	pageListener, err := net.Listen("tcp", page.Addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Fatal(page.ServeTLS(proxyListener{pageListener}, "", ""))
 }
 
 func splitComma(s string) []string {

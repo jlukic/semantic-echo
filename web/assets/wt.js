@@ -213,7 +213,13 @@ const VERDICTS = {
   established: { tone: 'good', text: 'Session established.' },
   'no-udp': {
     tone: 'bad',
-    text: 'No QUIC packet from your address reached this port. UDP is being blocked or filtered somewhere between you and here — the WebTransport implementation never got a chance to run.',
+    text: 'No QUIC packet from your address reached this port. UDP is being blocked or filtered somewhere between you and here, so the WebTransport implementation never got a chance to run.',
+  },
+  // the session plainly worked, so silence here is this host failing to match
+  // the page connection to it rather than anything wrong at your end
+  unmatched: {
+    tone: '',
+    text: 'The session opened, but this host could not match your page connection to it and has nothing to show. That is a limitation here, not a problem with your client.',
   },
   'gave-up': {
     tone: 'bad',
@@ -230,8 +236,11 @@ const VERDICTS = {
   unknown: { tone: '', text: 'No server-side record for your address in the last few seconds.' },
 };
 
-const verdictFor = events => {
-  if (!events?.length) return 'no-udp';
+// outcome is what the client observed. an empty record only means UDP never
+// arrived if the attempt also failed; alongside a session that opened it means
+// the two sides could not be matched, which is a different thing to say
+const verdictFor = (events, outcome) => {
+  if (!events?.length) return outcome === 'ready' ? 'unmatched' : 'no-udp';
   const kinds = new Set(events.map(e => e.kind));
   if (kinds.has('session')) return 'established';
   if (kinds.has('declined')) return 'declined';
@@ -249,10 +258,10 @@ const EVENT_LABELS = {
   closed: 'Connection closed',
 };
 
-const renderObservation = (host, data, port) => {
+const renderObservation = (host, data, port, outcome) => {
   host.textContent = '';
   const events = (data?.events || []).filter(e => !port || e.port === port);
-  const verdict = VERDICTS[verdictFor(events)];
+  const verdict = VERDICTS[verdictFor(events, outcome)];
 
   if (events.length) {
     const list = document.createElement('ul');

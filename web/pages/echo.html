@@ -150,7 +150,7 @@ const readDatagrams = async readable => {
   catch (error) { line(`datagram reader stopped: ${describe(error)}`, 'bad'); }
 };
 
-const showObservation = async port => {
+const showObservation = async (port, outcome) => {
   const host = document.querySelector('#observation');
   host.textContent = '';
   const box = document.createElement('div');
@@ -159,7 +159,7 @@ const showObservation = async port => {
   host.append(box);
   // the servers publish asynchronously, so give the record a moment to land
   await new Promise(resolve => setTimeout(resolve, 400));
-  renderObservation(host, await observed(), port);
+  renderObservation(host, await observed(), port, outcome);
 };
 
 tool.connect.onclick = async () => {
@@ -196,7 +196,7 @@ tool.connect.onclick = async () => {
     teardown();
   }
 
-  showObservation(target.includes(location.hostname) ? port : null);
+  showObservation(target.includes(location.hostname) ? port : null, result.outcome);
 };
 
 tool.disconnect.onclick = () => {
