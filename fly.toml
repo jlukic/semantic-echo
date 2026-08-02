@@ -50,6 +50,28 @@ primary_region = 'iad'
   [[services.ports]]
     port = 4437
 
+# the same pinned listener again, with CertSign added to the leaf's KeyUsage
+[[services]]
+  protocol = 'udp'
+  internal_port = 4439
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 4439
+
+# and again on the port the production lane uses, leaf unchanged
+[[services]]
+  protocol = 'udp'
+  internal_port = 6443
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 6443
+
 # rung B: rust wtransport over quinn
 [[services]]
   protocol = 'udp'

@@ -40,6 +40,8 @@ import (
 func main() {
 	port := flag.Int("port", 4436, "WebTransport UDP port serving the real chain")
 	pinnedPort := flag.Int("pinnedport", 4437, "WebTransport UDP port serving the self-signed, hash-pinned leaf")
+	certSignPort := flag.Int("certsignport", 4439, "WebTransport UDP port serving a pinned leaf that also carries CertSign")
+	altPort := flag.Int("altport", 6443, "WebTransport UDP port serving the same pinned leaf, so the port number is the only variable")
 	certFile := flag.String("cert", "/cert.pem", "fullchain PEM path")
 	keyFile := flag.String("key", "/key.pem", "private key PEM path")
 	qlogDir := flag.String("qlog", "qlog-legacy", "qlog output directory")
@@ -59,21 +61,38 @@ func main() {
 	}
 
 	hosts := splitComma(*sans)
-	pinned, hash := mintLeaf(hosts)
-	// the page server lives in the other binary, so the hash travels by file
-	hashPath := fmt.Sprintf("%s/hash%d", *hashDir, *pinnedPort)
-	if err := os.WriteFile(hashPath, []byte(hash), 0o644); err != nil {
-		log.Fatalf("legacy: publishing pinned hash: %v", err)
-	}
+	pinned, pinnedHash := mintLeaf(hosts, x509.KeyUsageDigitalSignature)
+	// the same leaf shape the production lane mints: CertSign set on something
+	// that is still explicitly not a CA
+	certSign, certSignHash := mintLeaf(hosts, x509.KeyUsageDigitalSignature|x509.KeyUsageCertSign)
 
-	log.Printf("wt-legacy boot wt=:%d pinned=:%d qlog=%s webtransport-go=v0.11.0 quic-go=v0.60.0", *port, *pinnedPort, *qlogDir)
-	log.Printf("pinned certHash=%s published=%s sans=%v", hash, hashPath, hosts)
+	// the page server lives in the other binary, so hashes travel by file
+	publish := func(port int, hash string) {
+		if err := os.WriteFile(fmt.Sprintf("%s/hash%d", *hashDir, port), []byte(hash), 0o644); err != nil {
+			log.Fatalf("legacy: publishing hash for :%d: %v", port, err)
+		}
+	}
+	publish(*pinnedPort, pinnedHash)
+	publish(*certSignPort, certSignHash)
+	// altport serves the very same certificate object as pinnedPort, so nothing
+	// but the port number separates the two
+	publish(*altPort, pinnedHash)
+
+	log.Printf("wt-legacy boot wt=:%d pinned=:%d certsign=:%d alt=:%d qlog=%s webtransport-go=v0.11.0 quic-go=v0.60.0",
+		*port, *pinnedPort, *certSignPort, *altPort, *qlogDir)
+	// int() is load-bearing: x509.KeyUsage is a Stringer, so %x on the bare
+	// value hex-encodes its name instead of the bit field
+	log.Printf("pinned   certHash=%s keyUsage=0x%02x isCA=false sans=%v", pinnedHash, int(x509.KeyUsageDigitalSignature), hosts)
+	log.Printf("certsign certHash=%s keyUsage=0x%02x isCA=false", certSignHash, int(x509.KeyUsageDigitalSignature|x509.KeyUsageCertSign))
+	log.Printf("altport  :%d serves the pinned leaf unchanged", *altPort)
 
 	// either listener dying takes the process with it, so a half-served machine
-	// restarts instead of quietly answering on one port
-	errs := make(chan error, 2)
+	// restarts instead of quietly answering on some ports
+	errs := make(chan error, 4)
 	go func() { errs <- serveWT(*bindHost, *port, chain, "legacy") }()
 	go func() { errs <- serveWT(*bindHost, *pinnedPort, pinned, "pinned") }()
+	go func() { errs <- serveWT(*bindHost, *certSignPort, certSign, "certsign") }()
+	go func() { errs <- serveWT(*bindHost, *altPort, pinned, "altport") }()
 	log.Fatal(<-errs)
 }
 
@@ -136,10 +155,11 @@ func serveWT(bindHost string, port int, cert tls.Certificate, tag string) error 
 	return server.ListenAndServe()
 }
 
-// the pinned rung's leaf: self-signed P-256, DigitalSignature and serverAuth
-// only, explicitly not a CA. ten days keeps it inside the fourteen-day window
-// serverCertificateHashes allows, and it is minted fresh on every boot
-func mintLeaf(hosts []string) (tls.Certificate, string) {
+// a pinned rung's leaf: self-signed P-256 with serverAuth, explicitly not a CA,
+// and whatever KeyUsage the caller wants to put on trial. ten days keeps it
+// inside the fourteen-day window serverCertificateHashes allows, and it is
+// minted fresh on every boot
+func mintLeaf(hosts []string, usage x509.KeyUsage) (tls.Certificate, string) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		log.Fatal(err)
@@ -151,7 +171,7 @@ func mintLeaf(hosts []string) (tls.Certificate, string) {
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 24 * time.Hour),
 		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageDigitalSignature,
+		KeyUsage:              usage,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	for _, h := range hosts {
