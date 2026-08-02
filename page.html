@@ -60,13 +60,15 @@
     logEl.textContent = '';
     if (typeof WebTransport !== 'function') { line('no WebTransport in this runtime', 'bad'); return; }
     try {
+      // hash=<base64> pins an externally-supplied leaf hash — for dialing a
+      // foreign origin whose cert this box never minted (e.g. the lane).
       // hashport=N pins against the leaf a sibling rung published under /hashN.
       // the default /hash is empty in production, so plain taps run pure PKI
       const hashPort = q.get('hashport');
       // absolute via location.origin, which never carries credentials. a
       // relative fetch inherits them from a https://user:pass@host/auth/ URL and
       // browsers reject that, which would read as a WebTransport failure here
-      const hash = await (await fetch(`${location.origin}/hash${hashPort || ''}`)).text();
+      const hash = q.get('hash') || await (await fetch(`${location.origin}/hash${hashPort || ''}`)).text();
       if (hash && q.get('nohash') !== '1') {
         const bytes = Uint8Array.from(atob(hash), c => c.charCodeAt(0));
         options.serverCertificateHashes = [{ algorithm: 'sha-256', value: bytes }];
