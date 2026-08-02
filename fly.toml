@@ -94,9 +94,11 @@ primary_region = 'iad'
   [[services.ports]]
     port = 4438
 
-# the probe page, on plain https with no port in the URL. raw TCP passthrough
-# with no handlers on purpose: the app terminates TLS itself with the Let's
-# Encrypt chain, and the same chain has to be what the WT port serves
+# the page, on plain https with no port in the URL. TLS stays with the app so it
+# serves the same Let's Encrypt chain the WT ports do, which rules the tls
+# handler out. proxy_proto is the one handler in play: without it the app sees
+# Fly's proxy rather than the client, and the page cannot match a session to the
+# connection asking about it
 [[services]]
   protocol = 'tcp'
   internal_port = 4434
@@ -106,6 +108,7 @@ primary_region = 'iad'
 
   [[services.ports]]
     port = 443
+    handlers = ['proxy_proto']
 
 [[vm]]
   size = 'shared-cpu-1x'
