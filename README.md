@@ -3,9 +3,7 @@
 A public WebTransport echo server, live at
 **[echo.semantic-ui.com](https://echo.semantic-ui.com/)**.
 
-Point a client at it and your datagrams and streams come straight back. It
-serves a real Let's Encrypt certificate, so there is no `serverCertificateHashes`
-pinning, no local CA, and nothing to install.
+Point a client at it and your datagrams and streams come straight back.
 
 ```js
 const wt = new WebTransport('https://echo.semantic-ui.com:4436/echo');
