@@ -14,7 +14,7 @@ against this, the client is the variable.
 
 | | |
 |---|---|
-| Probe page | <https://echo.semantic-ui.com:4434/> |
+| Probe page | <https://echo.semantic-ui.com/> |
 | WebTransport endpoint | `https://echo.semantic-ui.com:4433/echo` |
 | Certificate | Let's Encrypt, served on both ports, no `serverCertificateHashes` |
 
@@ -53,7 +53,10 @@ dedicated address and the external port must equal the internal one — Fly does
 not rewrite UDP destination ports. There is no IPv6 address on this app on
 purpose: Fly routes no public UDP over v6.
 
-The machine auto-stops when idle. Any TCP request to port 4434 wakes it, so
+Port 443 maps to the app's 4434 as raw TCP, so the page needs no port in its
+URL while the app still owns the TLS handshake.
+
+The machine auto-stops when idle. Any TCP request to port 443 wakes it, so
 loading the page before tapping is the normal entry path.
 
 ```sh

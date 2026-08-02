@@ -17,8 +17,9 @@ primary_region = 'iad'
   [[services.ports]]
     port = 4433
 
-# the probe page. no TLS handler on purpose: the app terminates TLS itself with
-# the Let's Encrypt chain, and the same chain has to be what the WT port serves
+# the probe page, on plain https with no port in the URL. raw TCP passthrough
+# with no handlers on purpose: the app terminates TLS itself with the Let's
+# Encrypt chain, and the same chain has to be what the WT port serves
 [[services]]
   protocol = 'tcp'
   internal_port = 4434
@@ -27,7 +28,7 @@ primary_region = 'iad'
   min_machines_running = 0
 
   [[services.ports]]
-    port = 4434
+    port = 443
 
 [[vm]]
   size = 'shared-cpu-1x'
