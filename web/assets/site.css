@@ -730,7 +730,9 @@ button.action {
   }
 
   .colophon {
-    margin: var(--margin-3xs) 0 0;
+    margin: var(--margin-s) 0 0;
+    padding-top: var(--margin-xs);
+    border-top: var(--internal-border);
 
     .sep { color: var(--border-color); margin: 0 0.15em; }
   }
