@@ -346,7 +346,35 @@ const initTabs = tabs => {
   addEventListener('resize', () => place(current()));
 };
 
+/* Every heading becomes a link target. Derived from the heading text rather
+   than written into the markup, so a new section is linkable the moment it
+   exists, and an id already set by hand is left alone. */
+const slug = text => text.toLowerCase().trim()
+  .replace(/[^\w\s-]/g, '')
+  .replace(/\s+/g, '-');
+
+const initAnchors = () => {
+  const taken = new Set([...document.querySelectorAll('[id]')].map(node => node.id));
+  for (const heading of document.querySelectorAll('.container h2, .container h3')) {
+    if (!heading.id) {
+      let id = slug(heading.textContent);
+      // two sections can share a name across a long page
+      for (let n = 2; taken.has(id); n++) { id = `${slug(heading.textContent)}-${n}`; }
+      heading.id = id;
+    }
+    taken.add(heading.id);
+
+    const anchor = document.createElement('a');
+    anchor.className = 'anchor';
+    anchor.href = `#${heading.id}`;
+    anchor.setAttribute('aria-label', `Link to ${heading.textContent.trim()}`);
+    heading.append(anchor);
+  }
+};
+
 const initChrome = () => {
+  initAnchors();
+
   const toggle = document.querySelector('#theme-toggle');
   if (toggle) {
     toggle.onclick = () => setTheme(document.documentElement.classList.contains('dark') ? 'light' : 'dark');

@@ -11,7 +11,7 @@ ASSETS=$ROOT/web/assets
 
 # only the icons the pages actually use — the full Lucide sheet is 46 KB of
 # definitions for icons nothing here references
-ICONS="moon sun copy check radio-tower triangle-alert list-checks circle-check
+ICONS="moon sun copy check link radio-tower triangle-alert list-checks circle-check
 circle-x circle-alert flask-conical terminal book plug network shield-alert bug"
 
 echo "stylesheet"

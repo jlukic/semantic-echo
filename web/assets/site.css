@@ -172,6 +172,27 @@ h3 {
 
 h3 + p, h3 + .hint { margin-top: 0; }
 
+/* a heading arrived at by link should not sit flush against the viewport */
+h2, h3 { scroll-margin-top: var(--margin); }
+
+.anchor {
+  display: inline-block;
+  width: 0.62em;
+  height: 0.62em;
+  margin-left: 0.45em;
+  vertical-align: baseline;
+  background-color: var(--standard-40);
+  mask-image: var(--icon-link);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+h2:hover .anchor, h3:hover .anchor, .anchor:focus-visible { opacity: 1; }
+.anchor:hover { background-color: var(--primary-color); }
+
 .intro {
   color: var(--muted-text-color);
   line-height: 1.65;
