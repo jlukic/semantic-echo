@@ -10,9 +10,9 @@ Everything here is deliberately vanilla. The control server is
 the library's defaults produce is the wire under test. When a client fails
 against this, the client is the variable.
 
-Alongside it run two more servers on their own ports. All three share one
-certificate and one echo shape, so a client that binds against one and refuses
-another has narrowed the requirement to whatever differs between them.
+Alongside it run three more listeners on their own ports. They share one echo
+shape and vary one thing each, so a client that binds against one and refuses
+another has named its requirement rather than merely failed.
 
 ## Taps
 
@@ -22,25 +22,45 @@ another has narrowed the requirement to whatever differs between them.
 | Control, webtransport-go v0.12.0 | `https://echo.semantic-ui.com:4433/echo` |
 | …the same server on the default port | `https://echo.semantic-ui.com/echo` (443/udp) |
 | webtransport-go v0.11.0 on quic-go v0.60.0 | `https://echo.semantic-ui.com:4436/echo` |
+| …the same server, self-signed leaf, pinned | `https://echo.semantic-ui.com:4437/echo` |
 | rust `wtransport` over quinn | `https://echo.semantic-ui.com:4438/echo` |
-| Certificate | Let's Encrypt, served on every port, no `serverCertificateHashes` |
+| Certificate | Let's Encrypt everywhere except 4437 |
 
 Pinning the older library pins its whole wire image, QUIC transport parameters
 as well as h3 SETTINGS, which reproducing the SETTINGS alone on a newer core
-cannot do. The Rust rung shares no code with either Go server, so it separates
-"this client dislikes quic-go" from "this client dislikes WebTransport".
+cannot do. Notably v0.11.0 sends the `WT_INITIAL_MAX_DATA` /
+`WT_INITIAL_MAX_STREAMS_UNI` / `WT_INITIAL_MAX_STREAMS_BIDI` trio that v0.12.0
+omits, which draft-13 makes mandatory whenever `WT_MAX_SESSIONS` exceeds 1.
+
+The Rust rung shares no code with either Go server, so it separates "this client
+dislikes quic-go" from "this client dislikes WebTransport".
+
+Ports 4436 and 4437 are one listener function called twice, differing only in
+the certificate handed to it: 4436 serves the real chain, 4437 serves a
+self-signed P-256 leaf minted at boot and pinned by hash. Their SETTINGS are
+byte-identical, so a client that binds 4436 and refuses 4437 has isolated
+`serverCertificateHashes` itself as the blocker, with nothing else to blame.
+The leaf lives ten days, inside the fourteen-day ceiling pinning allows.
 
 The page sweeps `WebTransport` constructor options via query params, one preset
 per link, and logs every stage with millisecond stamps. Presets cover
 `requireUnreliable` on and off, a non-empty `protocols` list, tight
 anticipated-stream counts, and one link per rung. `?url=` retargets it at any
 other server, which makes the page a portable client harness rather than a
-fixture for this host alone.
+fixture for this host alone. `?hashport=N` pins the leaf that the listener on
+port N published, which is how the 4437 tap gets its hash; without it a tap runs
+pure PKI validation.
+
+Datagram plumbing is feature-detected. Safari exposes the streams as
+`createWritable()` / `createReadable()` factories rather than the `writable` and
+`readable` accessors the specification settled on, and a runtime with neither
+still reports its session as established instead of throwing.
 
 Every endpoint echoes datagrams and bidirectional streams straight back. The Go
 servers write a qlog per connection under `/tmp/qlog` and `/tmp/qlog-legacy`;
 all three log session requests to stdout, so `flyctl logs` separates them by
-their `legacy` and `rust` prefixes.
+their `legacy`, `pinned` and `rust` prefixes. The pinned listener publishes its
+leaf hash to `/tmp/hash4437`, which the page server hands back at `/hash4437`.
 
 ## Running locally
 
@@ -61,14 +81,15 @@ Serves the page on `https://localhost:4434/` and WebTransport on
 Useful flags: `-port`, `-pageport`, `-san`, `-qlog`, and `-bind` (set to
 `fly-global-services` on Fly, which is the only interface public UDP arrives on).
 
-The other two rungs both want a real chain on disk and take no self-signed path,
-so point them at any PEM pair:
+The other rungs want a real chain on disk, so point them at any PEM pair:
 
 ```sh
 cd legacy && go build -o wt-legacy . && ./wt-legacy -cert fullchain.pem -key privkey.pem
 cd rust   && cargo build --release && ./target/release/wt-rust "" 4438
 ```
 
+`wt-legacy` raises both 4436 and its pinned twin on 4437, and writes the pinned
+leaf hash into `-hashdir` (`/tmp` by default) for the page server to serve.
 `wt-rust` takes its bind host and port as positional arguments; an empty host
 means all interfaces, and it reads `/cert.pem` and `/key.pem`.
 
