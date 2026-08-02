@@ -2,7 +2,7 @@ FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY main.go pages.go observe.go ./
+COPY *.go ./
 COPY web ./web
 RUN CGO_ENABLED=0 go build -o /wt-lab .
 
@@ -11,7 +11,7 @@ FROM golang:1.26-alpine AS build-legacy
 WORKDIR /src
 COPY legacy/go.mod legacy/go.sum ./
 RUN go mod download
-COPY legacy/main.go legacy/observe.go ./
+COPY legacy/*.go ./
 RUN CGO_ENABLED=0 go build -o /wt-legacy .
 
 FROM rust:1-bookworm AS build-rust
