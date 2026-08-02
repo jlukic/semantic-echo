@@ -43,6 +43,14 @@ import (
 //go:embed page.html
 var pageHTML []byte
 
+// the /auth/ fixture credentials. deliberately trivial and deliberately public:
+// the route exists to reproduce a Basic-auth browsing context, not to protect
+// anything, and the same page is served unauthenticated at /
+const (
+	authUser = "retro"
+	authPass = "retro"
+)
+
 func newTemplate(cn string, days int) x509.Certificate {
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 62))
 	return x509.Certificate{
@@ -248,6 +256,22 @@ func main() {
 		Addr:      fmt.Sprintf(":%d", *pagePort),
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{pageCert}},
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// /auth/ serves the same page from behind Basic auth, reproducing the
+			// browsing context the production page is loaded in. the /hash
+			// endpoints stay open so the page's own fetches keep working from
+			// here, and nothing behind this guards anything
+			if r.URL.Path == "/auth" || strings.HasPrefix(r.URL.Path, "/auth/") {
+				user, pass, ok := r.BasicAuth()
+				if !ok || user != authUser || pass != authPass {
+					w.Header().Set("WWW-Authenticate", `Basic realm="echo"`)
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				w.Header().Set("Content-Type", "text/html")
+				w.Write(pageHTML)
+				return
+			}
+
 			switch r.URL.Path {
 			case "/hash":
 				w.Header().Set("Content-Type", "text/plain")

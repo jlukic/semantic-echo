@@ -8,8 +8,11 @@
   #presets a { display: inline-block; margin: 0 .6em .6em 0; padding: .45em .8em;
     background: #eee; border-radius: .5em; text-decoration: none; color: #06c; }
   #opts { color: #666; font-size: .85em; word-break: break-all; }
+  /* the tail of the log lands under iOS's toolbars otherwise, and sticky scroll
+     will not let you drag it clear */
   #log { font: 14px/1.45 ui-monospace, monospace; white-space: pre-wrap;
-    word-break: break-all; background: #f6f6f6; padding: .8em; border-radius: .5em; }
+    word-break: break-all; background: #f6f6f6; padding: .8em; border-radius: .5em;
+    margin-bottom: 45vh; }
   button { font-size: 1.1em; padding: .5em 1.4em; margin: .6em 0; }
   .ok { color: #071; } .bad { color: #c11; }
 </style>
@@ -26,6 +29,7 @@
   <a href="?url=https://echo.semantic-ui.com:4437/echo&hashport=4437">pinned (A/B vs :4436)</a>
   <a href="?url=https://echo.semantic-ui.com:4439/echo&hashport=4439">pinned + CertSign leaf</a>
   <a href="?url=https://echo.semantic-ui.com:6443/echo&hashport=6443">pinned on :6443</a>
+  <a href="?url=https://echo.semantic-ui.com:4436/echo&maxage=900">maxAge like the lane</a>
 </div>
 <div id="opts"></div>
 <button id="go">connect</button>
@@ -69,6 +73,17 @@
       line(`constructing ${url}`);
       line(`options ${JSON.stringify(options, (k, v) => v instanceof Uint8Array ? '<bytes>' : v)}`);
       const wt = new WebTransport(url, options);
+      // the lane sets both maxAge properties here, after construction and before
+      // ready, so the timing is part of what this reproduces
+      if (q.get('maxage')) {
+        const maxAge = +q.get('maxage');
+        try {
+          wt.datagrams.incomingMaxAge = maxAge;
+          wt.datagrams.outgoingMaxAge = maxAge;
+          line(`maxAge set to ${maxAge}`);
+        }
+        catch (error) { line(`maxAge setters threw ${error?.name}: "${error?.message}"`, 'bad'); }
+      }
       wt.closed.then(
         info => line(`closed: ${JSON.stringify(info)}`),
         err => line(`closed rejected: ${err?.name}: "${err?.message}" source=${err?.source} code=${err?.streamErrorCode}`, 'bad'));
@@ -99,5 +114,5 @@
   };
 
   document.getElementById('opts').textContent =
-    `target ${url} · params: ru=0 pool=1 protos=a,b uni=N bidi=N nohash=1 hashport=N url=…`;
+    `target ${url} · params: ru=0 pool=1 protos=a,b uni=N bidi=N nohash=1 hashport=N maxage=N url=…`;
 </script>
