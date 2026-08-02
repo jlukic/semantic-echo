@@ -1,11 +1,13 @@
 {{define "content"}}
-<p class="intro">WebTransport reached Baseline in March 2026, but the interior is uneven.
-Engines disagree about what a server must advertise, which certificates count, and which
-half of the API exists. The gaps below are the ones that cost a working day.</p>
+<p class="intro">WebTransport reached Baseline in March 2026, but the implementation is
+uneven. Engines disagree about what a server must advertise, which certificates count, and
+which half of the API exists. The following list shows the most common gotchas when
+implementing WebTransport.</p>
 
 <h2><span class="icon" style="mask-image: var(--icon-list-checks)"></span>This runtime</h2>
 
-<p>Read from the browser you are using now. The last three rows need a live session.</p>
+<p>These settings were pulled from your browser. Click the probe button to populate the
+last three rows with a live session.</p>
 
 <div class="table-wrap"><table>
   <thead><tr><th>Capability</th><th>Here</th><th>Notes</th></tr></thead>
@@ -20,8 +22,9 @@ half of the API exists. The gaps below are the ones that cost a working day.</p>
 
 <h2><span class="icon" style="mask-image: var(--icon-triangle-alert)"></span>Safari and iOS</h2>
 
-<p>Safari is strictest about the handshake and quietest about failing it. A server that
-serves Chrome and Firefox is not thereby a server that serves Safari.</p>
+<p>WebTransport on Safari is the holy grail, because datagrams are most useful where
+connections are lossy. Here are the common solutions to getting WebTransport working on iOS
+devices like iPads and iPhones.</p>
 
 <h3>What a server must advertise</h3>
 
@@ -40,18 +43,18 @@ serves Chrome and Firefox is not thereby a server that serves Safari.</p>
 </table></div>
 
 <div class="callout warning">
-<p><b>Meeting both is still not sufficient.</b> This host serves two endpoints whose h3
-SETTINGS and QUIC transport parameters are byte-identical. Safari establishes a session
-against one and refuses the other. Whatever it is reacting to is not a value either side
-advertises, so no amount of auditing your own configuration will find it.</p>
-<p class="hint">Both are on the <a href="/">endpoint board</a>, the third and second rows.
-Chrome and Firefox bind both.</p>
+<p>There are still unknowns when working with Safari. The second and third rows on the
+<a href="/">endpoint board</a>, <code>:4440</code> and <code>:4436</code>, advertise
+byte-identical h3 SETTINGS and byte-identical QUIC transport parameters. Safari rejects one
+and accepts the other.</p>
+<p class="hint">Whatever it is reacting to is not a value either side advertises, so no
+amount of auditing your own configuration will find it. Chrome and Firefox bind both.</p>
 </div>
 
-<h3>What breaks</h3>
+<h3>Breaking Behaviors in Safari</h3>
 
 <div class="table-wrap"><table>
-  <thead><tr><th>Behaviour</th><th>Consequence</th></tr></thead>
+  <thead><tr><th>Behavior</th><th>Consequence</th></tr></thead>
   <tbody>
     <tr>
       <td>Every <code>WebTransportError</code> carries an <b>empty message</b></td>
@@ -84,7 +87,7 @@ Chrome and Firefox bind both.</p>
   </tbody>
 </table></div>
 
-<h2><span class="icon" style="mask-image: var(--icon-shield-alert)"></span>Certificates</h2>
+<h2><span class="icon" style="mask-image: var(--icon-shield-alert)"></span>Using Certificates</h2>
 
 <p><code>serverCertificateHashes</code> replaces certificate-chain validation rather than
 adding to it. The rules are narrow and mixing conventions fails silently.</p>
@@ -111,7 +114,7 @@ adding to it. The rules are narrow and mixing conventions fails silently.</p>
   <span id="run-certs-state" class="hint"></span>
 </p>
 
-<h2><span class="icon" style="mask-image: var(--icon-bug)"></span>Chrome and Firefox</h2>
+<h2><span class="icon" style="mask-image: var(--icon-bug)"></span>Current State of Chrome and Firefox</h2>
 
 <div class="table-wrap"><table>
   <thead><tr><th>Engine</th><th>Gap</th></tr></thead>
@@ -123,7 +126,7 @@ adding to it. The rules are narrow and mixing conventions fails silently.</p>
   </tbody>
 </table></div>
 
-<h2><span class="icon" style="mask-image: var(--icon-book)"></span>Everywhere</h2>
+<h2><span class="icon" style="mask-image: var(--icon-book)"></span>Additional Gotchas</h2>
 
 <div class="table-wrap"><table>
   <tbody>
@@ -133,8 +136,8 @@ adding to it. The rules are narrow and mixing conventions fails silently.</p>
   </tbody>
 </table></div>
 
-<p class="hint">The one-variable comparisons behind the Safari findings, with server-side
-captures: <a href="/exhibits/apple">WebKit</a> · <a href="/exhibits/quic-go">quic-go and
+<p class="hint">Additional information about bugs in
+<a href="/exhibits/apple">WebKit</a> and <a href="/exhibits/quic-go">quic-go and
 webtransport-go</a>.</p>
 {{end}}
 
@@ -161,7 +164,7 @@ const STATIC_ROWS = [
   ['getStats()', () => mark(has('WebTransport', 'getStats')), 'Congestion and datagram counters. Absent in Chrome, throws in Firefox'],
   ['congestionControl', () => mark(has('WebTransport', 'congestionControl')), 'Read-back of the <code>low-latency</code> hint'],
   ['protocol', () => mark(has('WebTransport', 'protocol')), 'Negotiated subprotocol'],
-  ['createSendGroup()', () => mark(has('WebTransport', 'createSendGroup')), 'Stream prioritisation. Safari only'],
+  ['createSendGroup()', () => mark(has('WebTransport', 'createSendGroup')), 'Stream prioritization. Safari only'],
   ['draining', () => mark(has('WebTransport', 'draining')), 'Server-initiated drain signal. Safari only'],
   ['Datagram buffer members', () => {
     if (has('WebTransportDatagramDuplexStream', 'incomingMaxBufferedDatagrams')) return '<span class="chip ready">current names</span>';
