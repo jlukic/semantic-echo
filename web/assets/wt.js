@@ -29,7 +29,7 @@ const ENDPOINTS = [
     id: 'validated',
     port: 4436,
     name: 'Older server build',
-    advertises: 'byte-identical SETTINGS to the row above',
+    advertises: 'the same SETTINGS as the row above',
     stack: 'webtransport-go v0.11.0 · quic-go v0.60.0',
   },
   {
@@ -44,10 +44,10 @@ const ENDPOINTS = [
 /* Certificate-path endpoints. Same echo, same handler; they differ in how the
    client is asked to trust the leaf. */
 const CERT_ENDPOINTS = [
-  { id: 'pki', port: 4436, name: 'WebPKI', detail: 'Real Let’s Encrypt chain, ordinary validation' },
+  { id: 'pki', port: 4436, name: 'WebPKI', detail: "Real Let's Encrypt chain, ordinary validation" },
   { id: 'pinned', port: 4437, hashPort: 4437, name: 'serverCertificateHashes', detail: 'Self-signed P-256 leaf, ten-day validity, pinned by SHA-256' },
   { id: 'certsign', port: 4439, hashPort: 4439, name: 'Pinned leaf carrying CertSign', detail: 'KeyUsage 0x21, still not a CA' },
-  { id: 'altport', port: 6443, hashPort: 6443, name: 'Pinned leaf on another port', detail: 'Byte-identical certificate to the row above' },
+  { id: 'altport', port: 6443, hashPort: 6443, name: 'Pinned leaf on another port', detail: 'The same certificate as the row above' },
 ];
 
 const endpointURL = port => port === 443
@@ -225,7 +225,7 @@ const VERDICTS = {
   },
   'gave-up': {
     tone: 'bad',
-    text: 'Your client completed QUIC and TLS, read the server’s SETTINGS, and then closed without sending the extended CONNECT request. It rejected the handshake on the settings it was offered.',
+    text: "Your client completed QUIC and TLS, read the server's SETTINGS, and then closed without sending the extended CONNECT request. It rejected the handshake on the settings it was offered.",
   },
   'upgrade-failed': {
     tone: 'bad',

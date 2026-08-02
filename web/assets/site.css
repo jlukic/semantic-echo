@@ -722,9 +722,18 @@ button.action {
   border-top: var(--border);
   color: var(--light-text-color);
   font-size: var(--text-xs);
-  display: flex;
-  gap: var(--gap-s);
-  flex-wrap: wrap;
+
+  .footer-nav {
+    display: flex;
+    gap: var(--gap-s);
+    flex-wrap: wrap;
+  }
+
+  .colophon {
+    margin: var(--margin-3xs) 0 0;
+
+    .sep { color: var(--border-color); margin: 0 0.15em; }
+  }
 
   a {
     color: var(--muted-text-color);
