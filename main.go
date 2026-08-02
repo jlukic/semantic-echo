@@ -19,12 +19,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	_ "embed"
+	"embed"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"math/big"
 	"net"
@@ -42,8 +44,15 @@ import (
 	"github.com/quic-go/webtransport-go"
 )
 
-//go:embed page.html
-var pageHTML []byte
+//go:embed web/pages/*.html
+var pagesFS embed.FS
+
+//go:embed web/assets
+var assetsFS embed.FS
+
+// what the page reports about this listener, and what every listener writes
+// down about the clients that reach it
+var watch *observer
 
 // the /auth/ fixture credentials. deliberately trivial and deliberately public:
 // the route exists to reproduce a Basic-auth browsing context, not to protect
@@ -126,9 +135,9 @@ func (b *budgets) spend(n int) bool {
 func addressOf(remote string) string {
 	host, _, err := net.SplitHostPort(remote)
 	if err != nil {
-		return remote
+		return normalizeAddress(remote)
 	}
-	return host
+	return normalizeAddress(host)
 }
 
 // io.Copy with a budget attached, so a public echo cannot become free bandwidth
@@ -326,6 +335,9 @@ func main() {
 	}
 	os.Setenv("QLOGDIR", *qlogDir)
 
+	parsePages()
+	watch = newObserver(*hashDir, "lab")
+
 	wtCertMode := flag.Lookup("wtcert").Value.String()
 	hosts := splitComma(*sans)
 	cert, hash := mintWTCert(hosts)
@@ -369,6 +381,19 @@ func main() {
 				QUICConfig: &quic.Config{
 					Tracer: qlog.DefaultConnectionTracer,
 				},
+				// fires once the QUIC handshake completes and before this server
+				// sends its SETTINGS. it is the only place to learn that a client
+				// arrived and then left without ever asking for a session, which
+				// is what a refusal looks like from this side
+				ConnContext: func(ctx context.Context, conn *quic.Conn) context.Context {
+					address := addressOf(conn.RemoteAddr().String())
+					watch.record(address, port, kindQUIC, "")
+					go func() {
+						<-conn.Context().Done()
+						watch.record(address, port, kindClosed, closeReason(conn.Context()))
+					}()
+					return ctx
+				},
 			},
 			// nil leaves the library's defaults alone, which is the control
 			Config: config,
@@ -379,8 +404,10 @@ func main() {
 		mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 			log.Printf("connect  port=%d origin=%q wt-available-protocols=%q", port, r.Header.Get("Origin"), r.Header.Get("Wt-Available-Protocols"))
 			address := addressOf(r.RemoteAddr)
+			watch.record(address, port, kindConnect, "origin="+r.Header.Get("Origin"))
 			if ok, why := limits.acquire(address); !ok {
 				log.Printf("upgrade declined port=%d remote=%s (%s)", port, r.RemoteAddr, why)
+				watch.record(address, port, kindDeclined, why)
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
@@ -388,10 +415,12 @@ func main() {
 			if err != nil {
 				limits.release(address)
 				log.Printf("upgrade REFUSED: %v", err)
+				watch.record(address, port, kindRefused, err.Error())
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 			log.Printf("session  accepted port=%d remote=%s", port, r.RemoteAddr)
+			watch.record(address, port, kindSession, "")
 			serveEcho(session, address)
 		})
 		server.H3.Handler = mux
@@ -405,14 +434,21 @@ func main() {
 		}()
 	}
 
+	// embedded under web/, served from /assets/
+	assetRoot, err := fs.Sub(assetsFS, "web")
+	if err != nil {
+		log.Fatal(err)
+	}
+	assets := http.FileServer(http.FS(assetRoot))
+
 	page := &http.Server{
 		Addr:      fmt.Sprintf(":%d", *pagePort),
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{pageCert}},
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// /auth/ serves the same page from behind Basic auth, reproducing the
-			// browsing context the production page is loaded in. the /hash
-			// endpoints stay open so the page's own fetches keep working from
-			// here, and nothing behind this guards anything
+			// /auth/ serves the echo page from behind Basic auth, reproducing a
+			// Basic-auth browsing context. the /hash and /observed endpoints stay
+			// open so the page's own fetches keep working from here, and nothing
+			// behind this guards anything
 			if r.URL.Path == "/auth" || strings.HasPrefix(r.URL.Path, "/auth/") {
 				user, pass, ok := r.BasicAuth()
 				if !ok || user != authUser || pass != authPass {
@@ -420,8 +456,13 @@ func main() {
 					w.WriteHeader(http.StatusUnauthorized)
 					return
 				}
-				w.Header().Set("Content-Type", "text/html")
-				w.Write(pageHTML)
+				renderPage(w, "/")
+				return
+			}
+
+			if strings.HasPrefix(r.URL.Path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=3600")
+				assets.ServeHTTP(w, r)
 				return
 			}
 
@@ -429,21 +470,39 @@ func main() {
 			case "/hash":
 				w.Header().Set("Content-Type", "text/plain")
 				fmt.Fprint(w, hash)
-			default:
-				// /hash<port> hands back the leaf hash a sibling listener published
-				// to disk, so the page can pin a rung this process does not serve
-				if suffix, ok := strings.CutPrefix(r.URL.Path, "/hash"); ok {
-					if p, err := strconv.ParseUint(suffix, 10, 16); err == nil {
-						// rebuilt from the parsed number, never from the raw path
-						published, _ := os.ReadFile(fmt.Sprintf("%s/hash%d", *hashDir, p))
-						w.Header().Set("Content-Type", "text/plain")
-						w.Write(published)
-						return
-					}
-				}
-				w.Header().Set("Content-Type", "text/html")
-				w.Write(pageHTML)
+				return
+			case "/observed":
+				// what every listener here saw from this address just now. the
+				// window is short because the page asks immediately after an
+				// attempt and stale rows would read as this one
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Cache-Control", "no-store")
+				json.NewEncoder(w).Encode(map[string]any{
+					"events": readObservations(*hashDir, clientAddress(r), 30*time.Second),
+				})
+				return
 			}
+
+			// /hash<port> hands back the leaf hash a sibling listener published
+			// to disk, so the page can pin a rung this process does not serve
+			if suffix, ok := strings.CutPrefix(r.URL.Path, "/hash"); ok {
+				if p, err := strconv.ParseUint(suffix, 10, 16); err == nil {
+					// rebuilt from the parsed number, never from the raw path
+					published, _ := os.ReadFile(fmt.Sprintf("%s/hash%d", *hashDir, p))
+					w.Header().Set("Content-Type", "text/plain")
+					w.Write(published)
+					return
+				}
+			}
+
+			route := strings.TrimSuffix(r.URL.Path, "/")
+			if route == "" {
+				route = "/"
+			}
+			if _, ok := pageSpecs[route]; !ok {
+				route = "/"
+			}
+			renderPage(w, route)
 		}),
 	}
 

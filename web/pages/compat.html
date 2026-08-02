@@ -1,0 +1,294 @@
+{{define "content"}}
+<p class="intro">WebTransport reached Baseline in March 2026, but the interior is uneven.
+Engines disagree about what a server must advertise, which certificates count, and which
+half of the API exists. The gaps below are the ones that cost a working day.</p>
+
+<h2><span class="icon" style="mask-image: var(--icon-list-checks)"></span>This runtime</h2>
+
+<p>Read from the browser you are using now. The last three rows need a live session.</p>
+
+<div class="table-wrap"><table>
+  <thead><tr><th>Capability</th><th>Here</th><th>Notes</th></tr></thead>
+  <tbody id="runtime"></tbody>
+</table></div>
+
+<p>
+  <button id="probe" class="action">Probe with a live session</button>
+  <span id="probe-state" class="hint"></span>
+</p>
+<div id="probe-log" class="log"></div>
+
+<h2><span class="icon" style="mask-image: var(--icon-triangle-alert)"></span>Safari and iOS</h2>
+
+<p>Safari is strictest about the handshake and quietest about failing it. A server that
+serves Chrome and Firefox is not thereby a server that serves Safari.</p>
+
+<h3>What a server must advertise</h3>
+
+<div class="table-wrap"><table>
+  <thead><tr><th>Requirement</th><th>If absent</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>WT_MAX_SESSIONS</code></td>
+      <td class="secondary"><code>ready</code> never resolves <em>and never rejects</em>. Keep a client-side timeout or the page hangs forever.</td>
+    </tr>
+    <tr>
+      <td><code>WT_INITIAL_MAX_DATA</code>, <code>WT_INITIAL_MAX_STREAMS_UNI</code>, <code>WT_INITIAL_MAX_STREAMS_BIDI</code> — required whenever <code>WT_MAX_SESSIONS</code> exceeds 1</td>
+      <td class="secondary">Session refused before CONNECT. This conditional comes from draft-13; Safari enforces it and other engines do not.</td>
+    </tr>
+  </tbody>
+</table></div>
+
+<div class="callout warning">
+<p><b>Meeting both is still not sufficient.</b> This host serves two endpoints whose h3
+SETTINGS and QUIC transport parameters are byte-identical. Safari establishes a session
+against one and refuses the other. Whatever it is reacting to is not a value either side
+advertises, so no amount of auditing your own configuration will find it.</p>
+<p class="hint">Both are on the <a href="/">endpoint board</a>, the third and second rows.
+Chrome and Firefox bind both.</p>
+</div>
+
+<h3>What breaks</h3>
+
+<div class="table-wrap"><table>
+  <thead><tr><th>Behaviour</th><th>Consequence</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Every <code>WebTransportError</code> carries an <b>empty message</b></td>
+      <td class="secondary">Invalid settings, TLS rejection and wire-level refusal are indistinguishable from the client, all arriving about 50&nbsp;ms after construction. Put your diagnostics server-side or you will not have any.</td>
+    </tr>
+    <tr>
+      <td>Datagram streams are <code>createWritable()</code> / <code>createReadable()</code> factories, not the <code>writable</code> / <code>readable</code> accessors</td>
+      <td class="secondary">Feature-detect both shapes. Code written against the specification alone reads <code>undefined</code>.</td>
+    </tr>
+    <tr>
+      <td>Flow-control credit is never released on FIN or RESET (<a href="https://bugs.webkit.org/show_bug.cgi?id=319818">319818</a>)</td>
+      <td class="secondary">The connection deadlocks at 16&nbsp;MB or 7,600 streams, whichever comes first. Long-lived sessions moving real volume will hit this.</td>
+    </tr>
+    <tr>
+      <td>User-installed root CAs are ignored for WebTransport</td>
+      <td class="secondary">TLS rejects with <code>certificate_unknown</code> even at full trust. A local CA that works for page loads fails here. Develop against hash pinning or real WebPKI, nothing between.</td>
+    </tr>
+    <tr>
+      <td><code>headers</code> is unimplemented (<a href="https://bugs.webkit.org/show_bug.cgi?id=311299">311299</a>)</td>
+      <td class="secondary">No request headers on the CONNECT. Carry what you need in the URL or the first message.</td>
+    </tr>
+    <tr>
+      <td>The wire implementation lives in Network.framework, not WebKit</td>
+      <td class="secondary">An OS point release can change SETTINGS handling with nothing appearing in Safari release notes. Re-test on every iOS and macOS update, not every Safari version.</td>
+    </tr>
+    <tr>
+      <td>The floor is iOS and macOS <b>26.4</b>, not Safari 26.4</td>
+      <td class="secondary">Gated on the OS version. An older OS running a newer Safari has no <code>WebTransport</code> at all. Support in WKWebView and in-app browsers is unconfirmed either way.</td>
+    </tr>
+  </tbody>
+</table></div>
+
+<h2><span class="icon" style="mask-image: var(--icon-shield-alert)"></span>Certificates</h2>
+
+<p><code>serverCertificateHashes</code> replaces certificate-chain validation rather than
+adding to it. The rules are narrow and mixing conventions fails silently.</p>
+
+<div class="table-wrap"><table>
+  <thead><tr><th>Rule</th><th>Detail</th></tr></thead>
+  <tbody>
+    <tr><td>Hash the <b>leaf DER</b></td><td class="secondary">SHA-256 over the leaf certificate only. Hashing the SPKI instead is the other convention in circulation, and it fails with no diagnostic.</td></tr>
+    <tr><td>Total validity <b>≤ 14 days</b></td><td class="secondary">Not remaining validity, but the whole <code>notBefore</code> to <code>notAfter</code> span. A 90-day certificate cannot be pinned on any engine.</td></tr>
+    <tr><td>ECDSA P-256</td><td class="secondary">Required by Chrome, and RSA is excluded everywhere by the specification.</td></tr>
+    <tr><td>Algorithm string is <code>"sha-256"</code></td><td class="secondary">Compared literally in WebKit. Any other casing never matches.</td></tr>
+    <tr><td>Incompatible with <code>allowPooling</code></td><td class="secondary">Safari throws <code>NotSupportedError</code> at construction if both are set.</td></tr>
+    <tr><td>Certificate names are irrelevant</td><td class="secondary">Nothing checks SANs on this path. A localhost-SAN certificate serves a public origin fine.</td></tr>
+    <tr><td>Chrome ignores the system trust store for QUIC</td><td class="secondary">mkcert and every other dev-certificate tool produce something Chrome will not accept for WebTransport. Pin instead.</td></tr>
+  </tbody>
+</table></div>
+
+<p>These four endpoints share one echo handler and differ only in how the leaf is trusted.</p>
+
+<div class="board" id="cert-board"></div>
+
+<p>
+  <button id="run-certs" class="action">Test all four</button>
+  <span id="run-certs-state" class="hint"></span>
+</p>
+
+<h2><span class="icon" style="mask-image: var(--icon-bug)"></span>Chrome and Firefox</h2>
+
+<div class="table-wrap"><table>
+  <thead><tr><th>Engine</th><th>Gap</th></tr></thead>
+  <tbody>
+    <tr><td>Chrome</td><td class="secondary"><code>allowPooling</code>, <code>requireUnreliable</code> and <code>headers</code> are absent from the IDL. WebIDL discards unknown dictionary members, so passing them does nothing and reports nothing.</td></tr>
+    <tr><td>Chrome</td><td class="secondary"><code>getStats()</code> and <code>congestionControl</code> unimplemented. <code>maxDatagramSize</code> is hardcoded to 1024 and never updated from the negotiated path MTU.</td></tr>
+    <tr><td>Firefox</td><td class="secondary"><code>getStats()</code> throws. <code>protocol</code> unimplemented. <code>serverCertificateHashes</code> works from 125 onward; earlier versions layered it on top of PKI instead of replacing it.</td></tr>
+    <tr><td>Safari</td><td class="secondary">The only engine shipping <code>createSendGroup</code>, <code>draining</code> and the <code>anticipatedConcurrentIncoming*</code> hints.</td></tr>
+  </tbody>
+</table></div>
+
+<h2><span class="icon" style="mask-image: var(--icon-book)"></span>Everywhere</h2>
+
+<div class="table-wrap"><table>
+  <tbody>
+    <tr><td><b>There is no HTTP/2 fallback</b></td><td class="secondary">The HTTP/2 binding is unimplemented in every browser. A client on a UDP-blocked path fails rather than falling back to TCP. Roughly 3 to 5 percent of clients cannot use QUIC at all, so ship a second transport at the application layer.</td></tr>
+    <tr><td><b>The draft is still moving</b></td><td class="secondary">Chrome and Safari both still send the legacy <code>:protocol = "webtransport"</code> rather than draft-15's <code>webtransport-h3</code>. A server enforcing the newer token strictly rejects every current browser.</td></tr>
+    <tr><td><b>Baseline "newly available", not "widely available"</b></td><td class="secondary">Interoperable since 2026-03-24. The 30-month bar lands around September 2028.</td></tr>
+  </tbody>
+</table></div>
+
+<p class="hint">The one-variable comparisons behind the Safari findings, with server-side
+captures: <a href="/exhibits/apple">WebKit</a> · <a href="/exhibits/quic-go">quic-go and
+webtransport-go</a>.</p>
+{{end}}
+
+{{define "script"}}
+<script>
+/* what can be read without opening a session: interface members. WebIDL drops
+   unknown dictionary members silently, so constructor options cannot be probed
+   this way — only the prototype tells the truth */
+const has = (ctor, member) => {
+  try { return member in window[ctor].prototype; } catch (error) { return false; }
+};
+
+const yes = '<span class="chip ready">yes</span>';
+const no = '<span class="chip refused">no</span>';
+const mark = value => value ? yes : no;
+
+const STATIC_ROWS = [
+  ['WebTransport', () => mark(typeof WebTransport === 'function'), 'The constructor itself'],
+  ['Datagram API shape', () => {
+    if (has('WebTransportDatagramDuplexStream', 'writable')) return '<span class="chip ready">accessors</span>';
+    if (has('WebTransportDatagramDuplexStream', 'createWritable')) return '<span class="chip error">factories</span>';
+    return no;
+  }, 'The specification settled on <code>writable</code> / <code>readable</code>; Safari ships factories'],
+  ['getStats()', () => mark(has('WebTransport', 'getStats')), 'Congestion and datagram counters. Absent in Chrome, throws in Firefox'],
+  ['congestionControl', () => mark(has('WebTransport', 'congestionControl')), 'Read-back of the <code>low-latency</code> hint'],
+  ['protocol', () => mark(has('WebTransport', 'protocol')), 'Negotiated subprotocol'],
+  ['createSendGroup()', () => mark(has('WebTransport', 'createSendGroup')), 'Stream prioritisation. Safari only'],
+  ['draining', () => mark(has('WebTransport', 'draining')), 'Server-initiated drain signal. Safari only'],
+  ['Datagram buffer members', () => {
+    if (has('WebTransportDatagramDuplexStream', 'incomingMaxBufferedDatagrams')) return '<span class="chip ready">current names</span>';
+    if (has('WebTransportDatagramDuplexStream', 'incomingHighWaterMark')) return '<span class="chip error">old names</span>';
+    return no;
+  }, 'Renamed from <code>incomingHighWaterMark</code>; implementations are split'],
+];
+
+const LIVE_ROWS = ['reliability', 'congestionControl (live)', 'maxDatagramSize'];
+
+const runtime = document.querySelector('#runtime');
+const cell = html => { const td = document.createElement('td'); td.innerHTML = html; return td; };
+
+for (const [name, read, note] of STATIC_ROWS) {
+  const tr = document.createElement('tr');
+  const th = document.createElement('td');
+  th.innerHTML = `<code>${name}</code>`;
+  tr.append(th, cell(read()), cell(`<span class="secondary">${note}</span>`));
+  runtime.append(tr);
+}
+
+const liveCells = new Map();
+for (const name of LIVE_ROWS) {
+  const tr = document.createElement('tr');
+  const th = document.createElement('td');
+  th.innerHTML = `<code>${name}</code>`;
+  const value = cell('<span class="chip">needs a session</span>');
+  tr.append(th, value, cell('<span class="secondary">Read from a live session against this host</span>'));
+  runtime.append(tr);
+  liveCells.set(name, value);
+}
+
+document.querySelector('#probe').onclick = async () => {
+  const button = document.querySelector('#probe');
+  const state = document.querySelector('#probe-state');
+  const log = document.querySelector('#probe-log');
+  log.textContent = '';
+  button.disabled = true;
+  state.textContent = 'opening a session…';
+
+  const line = lineWriter(log);
+  const result = await attempt(endpointURL(4436), { onLine: line, keepOpen: true, echo: false });
+
+  if (result.outcome !== 'ready') {
+    state.textContent = 'could not open a session';
+    button.disabled = false;
+    return;
+  }
+
+  const session = result.session;
+  const set = (name, html) => { liveCells.get(name).innerHTML = html; };
+  set('reliability', `<span class="chip ready">${session.reliability ?? 'undefined'}</span>`);
+  set('congestionControl (live)', session.congestionControl
+    ? `<span class="chip ready">${session.congestionControl}</span>`
+    : '<span class="chip refused">undefined</span>');
+  const size = session.datagrams?.maxDatagramSize;
+  set('maxDatagramSize', size ? `<span class="chip ready">${size} bytes</span>` : '<span class="chip refused">undefined</span>');
+
+  if (typeof session.getStats === 'function') {
+    try { line(`getStats() returns ${JSON.stringify(await session.getStats())}`, 'ok'); }
+    catch (error) { line(`getStats() threw ${describe(error)}`, 'bad'); }
+  }
+  else line('getStats() is not implemented here', 'dim');
+
+  try { session.close(); } catch (error) { /* already gone */ }
+  state.textContent = '';
+  button.disabled = false;
+};
+
+/* the certificate board */
+
+const certChips = new Map();
+
+for (const endpoint of CERT_ENDPOINTS) {
+  const row = document.createElement('div');
+  row.className = 'endpoint';
+
+  const who = document.createElement('div');
+  who.className = 'who';
+  const name = document.createElement('div');
+  name.className = 'url';
+  name.textContent = endpoint.name;
+  const what = document.createElement('div');
+  what.className = 'what';
+  what.textContent = `${endpointURL(endpoint.port)} — ${endpoint.detail}`;
+  who.append(name, what);
+
+  const run = document.createElement('button');
+  run.className = 'action';
+  run.textContent = 'Test';
+
+  const chip = document.createElement('span');
+  chip.className = 'chip';
+  chip.textContent = 'untested';
+
+  row.append(who, run, chip);
+  document.querySelector('#cert-board').append(row);
+  certChips.set(endpoint.id, { chip, run });
+
+  run.onclick = async () => { setCertBusy(true); await runCert(endpoint); setCertBusy(false); };
+}
+
+async function runCert(endpoint) {
+  const { chip } = certChips.get(endpoint.id);
+  chip.className = 'chip running';
+  chip.textContent = 'testing…';
+  const result = await attempt(endpointURL(endpoint.port), { hashPort: endpoint.hashPort });
+  chip.className = `chip ${result.outcome}`;
+  chip.textContent = result.outcome === 'ready' ? `ready ${result.ms}ms` : `${result.outcome} ${result.ms}ms`;
+  chip.title = result.detail;
+}
+
+function setCertBusy(busy) {
+  document.querySelector('#run-certs').disabled = busy;
+  for (const { run } of certChips.values()) run.disabled = busy;
+}
+
+document.querySelector('#run-certs').onclick = async () => {
+  const state = document.querySelector('#run-certs-state');
+  setCertBusy(true);
+  let done = 0;
+  for (const endpoint of CERT_ENDPOINTS) {
+    state.textContent = `testing ${++done} of ${CERT_ENDPOINTS.length}…`;
+    await runCert(endpoint);
+  }
+  state.textContent = '';
+  setCertBusy(false);
+};
+</script>
+{{end}}

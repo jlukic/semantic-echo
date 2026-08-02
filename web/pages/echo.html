@@ -1,0 +1,305 @@
+{{define "content"}}
+<p class="intro">A public WebTransport echo. Point a client at it and your datagrams and
+streams come straight back.</p>
+
+<div class="code-block">
+<pre><span class="kw">const</span> wt = <span class="kw">new</span> <span class="fn">WebTransport</span>(<span class="st">'https://echo.semantic-ui.com/echo'</span>);
+<span class="kw">await</span> wt.ready;
+
+<span class="kw">const</span> writer = wt.datagrams.writable.<span class="fn">getWriter</span>();
+<span class="kw">await</span> writer.<span class="fn">write</span>(<span class="kw">new</span> <span class="fn">TextEncoder</span>().<span class="fn">encode</span>(<span class="st">'hello'</span>));
+
+<span class="kw">const</span> reader = wt.datagrams.readable.<span class="fn">getReader</span>();
+<span class="kw">const</span> { value } = <span class="kw">await</span> reader.<span class="fn">read</span>();  <span class="cm">// "hello"</span></pre>
+</div>
+
+<p class="hint">On Safari those two streams are <code>createWritable()</code> and
+<code>createReadable()</code> factories instead. <a href="/compat">Other differences worth
+knowing</a>.</p>
+
+<h2><span class="icon" style="mask-image: var(--icon-plug)"></span>Connect</h2>
+
+<div class="dialer">
+  <label for="url">Endpoint</label>
+  <input id="url" type="text" spellcheck="false" autocapitalize="off" autocorrect="off">
+
+  <label class="switch" for="safari">
+    <input id="safari" type="checkbox">
+    <span>Use the endpoint Safari accepts. Safari and iOS refuse standard WebTransport
+    handshakes. <a href="/compat">Why</a></span>
+  </label>
+
+  <div class="row">
+    <button id="connect" class="action primary">Connect</button>
+    <button id="disconnect" class="action" disabled>Disconnect</button>
+    <span id="state" class="hint">idle</span>
+  </div>
+
+  <label for="message">Message</label>
+  <div class="row">
+    <input id="message" class="grow" type="text" value="hello" spellcheck="false">
+    <button id="send-datagram" class="action" disabled>Send datagram</button>
+    <button id="send-stream" class="action" disabled>Open stream</button>
+  </div>
+
+  <details>
+    <summary class="hint">Certificate hash and protocols</summary>
+    <label for="hash">Certificate hash, base64 SHA-256 of the leaf, for dialing a host you have no other way to trust</label>
+    <input id="hash" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="empty means ordinary certificate validation">
+    <label for="protocols">Protocols, comma separated</label>
+    <input id="protocols" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="empty omits the option">
+  </details>
+
+  <div id="log" class="log"></div>
+</div>
+
+<h2><span class="icon" style="mask-image: var(--icon-terminal)"></span>What the server saw</h2>
+
+<p>A failed WebTransport handshake reaches your code as one
+<code>WebTransportError</code> with an empty message. That is the whole diagnostic the
+browser offers, on every engine, for every cause. The server on the other end saw
+considerably more.</p>
+
+<div id="observation">
+  <div class="verdict">Connect above, then this fills in with what arrived here from your address.</div>
+</div>
+
+<h2><span class="icon" style="mask-image: var(--icon-network)"></span>Endpoints</h2>
+
+<p>Every endpoint runs the same echo handler behind the same certificate. They differ in
+what they advertise during the handshake, which is the part clients disagree about.</p>
+
+<div class="board" id="board"></div>
+
+<p>
+  <button id="run-all" class="action">Test all four</button>
+  <span id="run-all-state" class="hint"></span>
+</p>
+
+<p class="hint">Echo is budgeted: 1 MiB and 120 seconds per session, four sessions per
+address. Far above any interop or development test.</p>
+{{end}}
+
+{{define "script"}}
+<script>
+const tool = {
+  url: document.querySelector('#url'),
+  safari: document.querySelector('#safari'),
+  hash: document.querySelector('#hash'),
+  protocols: document.querySelector('#protocols'),
+  connect: document.querySelector('#connect'),
+  disconnect: document.querySelector('#disconnect'),
+  state: document.querySelector('#state'),
+  message: document.querySelector('#message'),
+  datagram: document.querySelector('#send-datagram'),
+  stream: document.querySelector('#send-stream'),
+  log: document.querySelector('#log'),
+};
+
+const STOCK = endpointURL(443);
+const SAFARI_SAFE = endpointURL(4436);
+const line = lineWriter(tool.log);
+
+// truth first: the default target is the stock server on the default port. if it
+// binds you are done in one click, and if it does not you have learned the most
+// useful thing this host knows
+const params = new URLSearchParams(location.search);
+tool.url.value = params.get('url') || STOCK;
+tool.safari.checked = tool.url.value === SAFARI_SAFE;
+
+tool.safari.onchange = () => {
+  tool.url.value = tool.safari.checked ? SAFARI_SAFE : STOCK;
+};
+tool.url.oninput = () => {
+  tool.safari.checked = tool.url.value.trim() === SAFARI_SAFE;
+};
+
+let session = null;
+let writer = null;
+const waiting = [];
+
+const setLive = live => {
+  tool.connect.disabled = live;
+  tool.disconnect.disabled = !live;
+  tool.datagram.disabled = !live;
+  tool.stream.disabled = !live;
+  tool.url.disabled = live;
+  tool.safari.disabled = live;
+};
+
+const teardown = () => {
+  session = null;
+  writer = null;
+  waiting.length = 0;
+  setLive(false);
+};
+
+// echoes arrive on one reader, so a send parks a resolver and the reader hands
+// the next payload to whoever is waiting
+const readDatagrams = async readable => {
+  const reader = readable.getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      const text = new TextDecoder().decode(value);
+      const next = waiting.shift();
+      if (next) next(text); else line(`datagram in "${text}"`);
+    }
+  }
+  catch (error) { line(`datagram reader stopped: ${describe(error)}`, 'bad'); }
+};
+
+const showObservation = async port => {
+  const host = document.querySelector('#observation');
+  host.textContent = '';
+  const box = document.createElement('div');
+  box.className = 'verdict';
+  box.textContent = 'asking the server…';
+  host.append(box);
+  // the servers publish asynchronously, so give the record a moment to land
+  await new Promise(resolve => setTimeout(resolve, 400));
+  renderObservation(host, await observed(), port);
+};
+
+tool.connect.onclick = async () => {
+  const target = tool.url.value.trim();
+  if (!target) return;
+  tool.log.textContent = '';
+  tool.state.textContent = 'connecting';
+  setLive(true);
+
+  let port = 443;
+  try { port = Number(new URL(target).port) || 443; } catch (error) { /* shown below */ }
+
+  const options = {};
+  const protocols = tool.protocols.value.trim();
+  if (protocols) options.protocols = protocols.split(',').map(p => p.trim()).filter(Boolean);
+  if (tool.hash.value.trim()) options.hash = tool.hash.value.trim();
+
+  const result = await attempt(target, { ...options, onLine: line, keepOpen: true, echo: false });
+
+  if (result.outcome === 'ready') {
+    session = result.session;
+    tool.state.textContent = 'connected';
+    session.closed.then(() => { line('session closed'); tool.state.textContent = 'closed'; teardown(); },
+                        () => { tool.state.textContent = 'closed'; teardown(); });
+    const streams = datagramStreams(session);
+    if (streams.writable && streams.readable) {
+      writer = streams.writable.getWriter();
+      readDatagrams(streams.readable);
+    }
+    else line('no datagram API in this runtime; streams only');
+  }
+  else {
+    tool.state.textContent = result.outcome;
+    teardown();
+  }
+
+  showObservation(target.includes(location.hostname) ? port : null);
+};
+
+tool.disconnect.onclick = () => {
+  if (!session) return;
+  try { session.close(); } catch (error) { /* already gone */ }
+  line('disconnected');
+  tool.state.textContent = 'closed';
+  teardown();
+};
+
+tool.datagram.onclick = async () => {
+  if (!writer) { line('no datagram writer on this session', 'bad'); return; }
+  const text = tool.message.value;
+  const started = performance.now();
+  const echo = new Promise(resolve => waiting.push(resolve));
+  await writer.write(new TextEncoder().encode(text));
+  line(`datagram out "${text}"`);
+  const answer = await Promise.race([echo, new Promise(resolve => setTimeout(() => resolve(null), 3000))]);
+  if (answer === null) { waiting.pop(); line('datagram echo timed out after 3s', 'bad'); return; }
+  line(`datagram echo "${answer}" in ${Math.round(performance.now() - started)}ms`, 'ok');
+};
+
+tool.stream.onclick = async () => {
+  if (!session) return;
+  const text = tool.message.value;
+  const started = performance.now();
+  try {
+    const stream = await session.createBidirectionalStream();
+    const streamWriter = stream.writable.getWriter();
+    await streamWriter.write(new TextEncoder().encode(text));
+    line(`stream out "${text}"`);
+    const reader = stream.readable.getReader();
+    const answer = await Promise.race([
+      reader.read(),
+      new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 3000)),
+    ]);
+    if (answer.timeout) line('stream echo timed out after 3s', 'bad');
+    else line(`stream echo "${new TextDecoder().decode(answer.value)}" in ${Math.round(performance.now() - started)}ms`, 'ok');
+    try { await streamWriter.close(); } catch (error) { /* peer may have gone */ }
+  }
+  catch (error) { line(`stream failed ${describe(error)}`, 'bad'); }
+};
+
+/* the board */
+
+const chips = new Map();
+
+for (const endpoint of ENDPOINTS) {
+  const row = document.createElement('div');
+  row.className = 'endpoint';
+
+  const who = document.createElement('div');
+  who.className = 'who';
+  const url = document.createElement('div');
+  url.className = 'url';
+  url.textContent = endpointURL(endpoint.port);
+  const what = document.createElement('div');
+  what.className = 'what';
+  what.textContent = endpoint.advertises;
+  what.title = endpoint.stack;
+  who.append(url, what);
+
+  const run = document.createElement('button');
+  run.className = 'action';
+  run.textContent = 'Test';
+
+  const chip = document.createElement('span');
+  chip.className = 'chip';
+  chip.textContent = 'untested';
+
+  row.append(who, run, chip);
+  document.querySelector('#board').append(row);
+  chips.set(endpoint.id, { chip, run });
+
+  run.onclick = async () => { setBoardBusy(true); await runEndpoint(endpoint); setBoardBusy(false); };
+}
+
+async function runEndpoint(endpoint) {
+  const { chip } = chips.get(endpoint.id);
+  chip.className = 'chip running';
+  chip.textContent = 'testing…';
+  const result = await attempt(endpointURL(endpoint.port), { hashPort: endpoint.hashPort });
+  chip.className = `chip ${result.outcome}`;
+  chip.textContent = result.outcome === 'ready' ? `ready ${result.ms}ms` : `${result.outcome} ${result.ms}ms`;
+  chip.title = result.detail;
+  return result;
+}
+
+function setBoardBusy(busy) {
+  document.querySelector('#run-all').disabled = busy;
+  for (const { run } of chips.values()) run.disabled = busy;
+}
+
+document.querySelector('#run-all').onclick = async () => {
+  const state = document.querySelector('#run-all-state');
+  setBoardBusy(true);
+  let done = 0;
+  for (const endpoint of ENDPOINTS) {
+    state.textContent = `testing ${++done} of ${ENDPOINTS.length}…`;
+    await runEndpoint(endpoint);
+  }
+  state.textContent = '';
+  setBoardBusy(false);
+};
+</script>
+{{end}}

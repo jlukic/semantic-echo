@@ -1,0 +1,170 @@
+{{define "content"}}
+<p class="category">Exhibit · WebKit and Network.framework</p>
+
+<h2><span class="icon" style="mask-image: var(--icon-flask-conical)"></span>iOS 27 refuses valid WebTransport handshakes</h2>
+
+<p class="intro">Two servers on this host advertise byte-identical h3 SETTINGS and
+byte-identical QUIC transport parameters. Safari on iOS 27.0 beta establishes a session
+against one and refuses the other. Chrome and Firefox bind both.</p>
+
+<div class="callout warning">
+<p>Measured on <b>iOS 27.0 beta</b>, six for six, on two devices across two networks.
+Not yet confirmed against a release build.</p>
+</div>
+
+<h3>The pair</h3>
+
+<div class="board" id="pair"></div>
+
+<p>
+  <button id="run-pair" class="action primary">Run both</button>
+  <span id="run-pair-state" class="hint"></span>
+</p>
+
+<p class="hint">Run this on an iPhone or iPad to reproduce. On a desktop browser both go
+green, which is the control.</p>
+
+<h3>What the server observes on a refusal</h3>
+
+<p>QUIC and TLS complete. SETTINGS are exchanged in both directions. The client opens the
+extended CONNECT stream, <b>writes zero bytes</b>, and abandons it.</p>
+
+<div class="code-block">
+<pre><span class="cm">// server qlog, refusal case</span>
+transport:packet_received     handshake complete
+http:frame_parsed             SETTINGS  (nine identifiers, both directions)
+http:stream_opened            stream 0, extended CONNECT
+transport:frame_received      <span class="kw">stop_sending</span>(stream 0, error 0x10C)   <span class="cm">// H3_REQUEST_CANCELLED</span>
+transport:frame_received      <span class="kw">reset_stream</span>(stream 0, final_size <span class="st">0</span>)
+transport:connection_closed   <span class="kw">0x100</span>                              <span class="cm">// H3_NO_ERROR, empty reason</span></pre>
+</div>
+
+<p><code>final_size = 0</code> is the tell: the CONNECT stream was created and nothing was
+ever written to it. The decision was taken on the SETTINGS exchange.</p>
+
+<p>Client-side the same moment is a <code>WebTransportError</code> with an empty message,
+roughly 50&nbsp;ms after construction.</p>
+
+<h3>What differs between the two, and what does not</h3>
+
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>:4440</th><th>:4436</th></tr></thead>
+  <tbody>
+    <tr><td>h3 SETTINGS</td><td class="secondary" colspan="2">Identical, nine identifiers, byte for byte</td></tr>
+    <tr><td>QUIC transport parameters</td><td class="secondary" colspan="2">Identical, measured</td></tr>
+    <tr><td>Certificate</td><td class="secondary" colspan="2">The same Let's Encrypt chain</td></tr>
+    <tr><td>Echo handler</td><td class="secondary" colspan="2">The same code</td></tr>
+    <tr><td>Server build</td><td class="secondary">webtransport-go v0.12.0 · quic-go v0.61.0</td><td class="secondary">webtransport-go v0.11.0 · quic-go v0.60.0</td></tr>
+    <tr><td>iOS 27.0 beta</td><td><span class="chip refused">refused</span></td><td><span class="chip ready">binds</span></td></tr>
+    <tr><td>Chrome, Firefox</td><td><span class="chip ready">binds</span></td><td><span class="chip ready">binds</span></td></tr>
+  </tbody>
+</table></div>
+
+<p>Because every advertised value matches, the input Safari is reacting to is something
+neither peer announces: frame encoding, capsule handling or sequencing.</p>
+
+<hr class="sep">
+
+<h3>A second, separable question</h3>
+
+<p>iOS 27 also enforces the draft-13 conditional that <code>WT_MAX_SESSIONS &gt; 1</code>
+obliges a server to send the three <code>WT_INITIAL_MAX_*</code> settings. A server
+advertising the former without the latter is refused before CONNECT.</p>
+
+<div class="board" id="conditional"></div>
+
+<p>
+  <button id="run-conditional" class="action">Run both</button>
+  <span id="run-conditional-state" class="hint"></span>
+</p>
+
+<p>This is defensible behaviour and no other engine enforces it. Worth confirming that the
+enforcement is intended, since it makes several widely deployed server defaults
+unreachable from Safari with no diagnostic.</p>
+
+<h3>The reporting problem underneath both</h3>
+
+<p>Invalid settings, TLS rejection and the wire-level refusal above all surface to web
+developers as the same <code>WebTransportError</code> with an empty message at the same
+latency. There is no client-side way to tell them apart, so the failures are only
+diagnosable by whoever controls the server.</p>
+
+<p class="hint">Related: <a href="/exhibits/quic-go">the server-library side of the same
+pair</a> · <a href="/compat">what this means if you are building on WebTransport</a></p>
+{{end}}
+
+{{define "script"}}
+<script>
+const PAIR = [
+  { id: 'trio', port: 4440, name: 'v0.12.0 with the flow-control settings sent', advertises: 'WT_MAX_SESSIONS and all three WT_INITIAL_MAX_* settings' },
+  { id: 'validated', port: 4436, name: 'v0.11.0, byte-identical SETTINGS', advertises: 'the same nine identifiers, byte for byte' },
+];
+
+const CONDITIONAL = [
+  { id: 'defaults', port: 4433, name: 'WT_MAX_SESSIONS = 2^62−1, no flow-control settings', advertises: 'violates the draft-13 conditional' },
+  { id: 'complete', port: 4436, name: 'WT_MAX_SESSIONS with the flow-control settings', advertises: 'satisfies it' },
+];
+
+function mountBoard(host, endpoints, runAllId, stateId) {
+  const state = new Map();
+
+  for (const endpoint of endpoints) {
+    const row = document.createElement('div');
+    row.className = 'endpoint';
+
+    const who = document.createElement('div');
+    who.className = 'who';
+    const name = document.createElement('div');
+    name.className = 'url';
+    name.textContent = endpoint.name;
+    const what = document.createElement('div');
+    what.className = 'what';
+    what.textContent = `${endpointURL(endpoint.port)} — ${endpoint.advertises}`;
+    who.append(name, what);
+
+    const run = document.createElement('button');
+    run.className = 'action';
+    run.textContent = 'Test';
+
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = 'untested';
+
+    row.append(who, run, chip);
+    document.querySelector(host).append(row);
+    state.set(endpoint.id, { chip, run });
+
+    run.onclick = async () => { busy(true); await runOne(endpoint); busy(false); };
+  }
+
+  async function runOne(endpoint) {
+    const { chip } = state.get(endpoint.id);
+    chip.className = 'chip running';
+    chip.textContent = 'testing…';
+    const result = await attempt(endpointURL(endpoint.port), {});
+    chip.className = `chip ${result.outcome}`;
+    chip.textContent = result.outcome === 'ready' ? `ready ${result.ms}ms` : `${result.outcome} ${result.ms}ms`;
+    chip.title = result.detail;
+  }
+
+  function busy(value) {
+    document.querySelector(runAllId).disabled = value;
+    for (const { run } of state.values()) run.disabled = value;
+  }
+
+  document.querySelector(runAllId).onclick = async () => {
+    const label = document.querySelector(stateId);
+    busy(true);
+    for (const endpoint of endpoints) {
+      label.textContent = `testing ${endpointURL(endpoint.port)}…`;
+      await runOne(endpoint);
+    }
+    label.textContent = '';
+    busy(false);
+  };
+}
+
+mountBoard('#pair', PAIR, '#run-pair', '#run-pair-state');
+mountBoard('#conditional', CONDITIONAL, '#run-conditional', '#run-conditional-state');
+</script>
+{{end}}

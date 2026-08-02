@@ -1,0 +1,45 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<meta name="description" content="{{.Description}}">
+<script>document.documentElement.classList.add(localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'))</script>
+<link rel="stylesheet" href="/assets/semantic.css">
+<link rel="stylesheet" href="/assets/fonts.css">
+<link rel="stylesheet" href="/assets/icons.css">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+
+<div class="page">
+  <div class="header">
+    <h1>WebTransport Echo</h1>
+    <div class="links">
+      <a href="https://github.com/jlukic/semantic-echo">Source</a>
+      <span class="sep">·</span>
+      <button class="theme-toggle" id="theme-toggle" title="Switch theme"></button>
+    </div>
+  </div>
+  <nav class="navigation">
+    <a href="/"{{if eq .Nav "echo"}} class="active"{{end}}>Echo</a>
+    <a href="/compat"{{if eq .Nav "compat"}} class="active"{{end}}>Compatibility</a>
+  </nav>
+</div>
+
+<div class="container">
+{{template "content" .}}
+
+<div class="footer">
+  <a href="/">Echo</a>
+  <a href="/compat">Compatibility</a>
+  <a href="https://github.com/jlukic/semantic-echo">Source</a>
+  <a href="https://w3c.github.io/webtransport/">Specification</a>
+</div>
+</div>
+
+<script src="/assets/wt.js"></script>
+{{template "script" .}}
+</body>
+</html>{{end}}

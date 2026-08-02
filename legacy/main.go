@@ -57,6 +57,8 @@ func main() {
 	}
 	os.Setenv("QLOGDIR", *qlogDir)
 
+	watch = newObserver(*hashDir, "legacy")
+
 	chain, err := tls.LoadX509KeyPair(*certFile, *keyFile)
 	if err != nil {
 		log.Fatalf("legacy: %v", err)
@@ -111,6 +113,18 @@ func serveWT(bindHost string, port int, cert tls.Certificate, tag string) error 
 		QUICConfig: &quic.Config{
 			Tracer: qlog.DefaultConnectionTracer,
 		},
+		// fires once the QUIC handshake completes and before SETTINGS go out, so
+		// a client that arrives and then leaves without asking for a session is
+		// still visible here
+		ConnContext: func(ctx context.Context, conn *quic.Conn) context.Context {
+			address := addressOf(conn.RemoteAddr().String())
+			watch.record(address, port, kindQUIC, "")
+			go func() {
+				<-conn.Context().Done()
+				watch.record(address, port, kindClosed, closeReason(conn.Context()))
+			}()
+			return ctx
+		},
 	}
 	// v0.11.0 leaves this to the caller — v0.12 moved it inside init(). without
 	// it the server advertises no WebTransport SETTINGS at all and every
@@ -126,8 +140,10 @@ func serveWT(bindHost string, port int, cert tls.Certificate, tag string) error 
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s connect  origin=%q wt-available-protocols=%q", tag, r.Header.Get("Origin"), r.Header.Get("Wt-Available-Protocols"))
 		address := addressOf(r.RemoteAddr)
+		watch.record(address, port, kindConnect, "origin="+r.Header.Get("Origin"))
 		if ok, why := limits.acquire(address); !ok {
 			log.Printf("%s upgrade declined remote=%s (%s)", tag, r.RemoteAddr, why)
+			watch.record(address, port, kindDeclined, why)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -135,10 +151,12 @@ func serveWT(bindHost string, port int, cert tls.Certificate, tag string) error 
 		if err != nil {
 			limits.release(address)
 			log.Printf("%s upgrade REFUSED: %v", tag, err)
+			watch.record(address, port, kindRefused, err.Error())
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		log.Printf("%s session  accepted remote=%s", tag, r.RemoteAddr)
+		watch.record(address, port, kindSession, "")
 		serveEcho(session, address)
 	})
 	h3.Handler = mux
@@ -219,9 +237,9 @@ func (b *budgets) spend(n int) bool {
 func addressOf(remote string) string {
 	host, _, err := net.SplitHostPort(remote)
 	if err != nil {
-		return remote
+		return normalizeAddress(remote)
 	}
-	return host
+	return normalizeAddress(host)
 }
 
 // io.Copy with a budget attached, so a public echo cannot become free bandwidth

@@ -1,0 +1,162 @@
+{{define "content"}}
+<p class="category">Exhibit · quic-go and webtransport-go</p>
+
+<h2><span class="icon" style="mask-image: var(--icon-flask-conical)"></span>Three findings against the Go stack</h2>
+
+<p class="intro">All three are reproducible against this host. Each is separable from the
+others and from anything Apple does.</p>
+
+<hr class="sep">
+
+<h3>1. The zero-config default cannot serve Safari</h3>
+
+<p>Under a nil <code>Config</code>, <code>addSettings</code> deletes all three
+<code>WT_INITIAL_MAX_*</code> settings that v0.11.0 sent unconditionally, while
+<code>ConfigureHTTP3Server</code> forces <code>WT_MAX_SESSIONS = 2^62−1</code>.</p>
+
+<p>draft-13 makes those three conditionally required whenever
+<code>WT_MAX_SESSIONS</code> exceeds 1. Safari 26.4 onward enforces it, so the
+out-of-the-box server is refused by current Safari with no diagnostic on either side.</p>
+
+<div class="board" id="defaults"></div>
+
+<p>
+  <button id="run-defaults" class="action">Run both</button>
+  <span id="run-defaults-state" class="hint"></span>
+</p>
+
+<p><b>Ask:</b> restore the trio under a nil <code>Config</code>, or default
+<code>WT_MAX_SESSIONS</code> to 1. Separately, expose a seam for it.
+<code>WT_MAX_SESSIONS</code> is currently set inside <code>init()</code> inside
+<code>Serve()</code>, so only a fork can change it.</p>
+
+<p class="hint">This one stands on API grounds regardless of what Apple concludes about
+the finding below.</p>
+
+<hr class="sep">
+
+<h3>2. A wire regression between v0.11/v0.60 and v0.12/v0.61</h3>
+
+<p>With SETTINGS byte-identical and QUIC transport parameters byte-identical, the newer
+pair is refused by iOS 27.0 beta where the older pair binds. The difference therefore lies
+in behaviour neither peer advertises: frame encoding, capsule handling, or sequencing.</p>
+
+<div class="board" id="regression"></div>
+
+<p>
+  <button id="run-regression" class="action">Run both</button>
+  <span id="run-regression-state" class="hint"></span>
+</p>
+
+<p>Server-side signature on the refusal: the peer opens the extended CONNECT stream, writes
+zero bytes, sends <code>stop_sending(stream 0, 0x10C)</code> and closes with
+<code>0x100</code>. Full capture on the <a href="/exhibits/apple">WebKit exhibit</a>.</p>
+
+<p><b>Before filing this, a sharpener:</b> pin webtransport-go v0.11.0 against quic-go
+v0.61.0 and raise it as a fifth rung. If it compiles and binds, the regression is in
+webtransport-go v0.12. If it compiles and refuses, it is in quic-go v0.61. If it does not
+compile, the two-pair repro above is what upstream has to bisect from.</p>
+
+<p class="hint">Observed only on a beta OS. Apple may resolve it before GM, in which case
+this becomes a note rather than a report.</p>
+
+<hr class="sep">
+
+<h3>3. The Go client refuses peers that do not negotiate RESET_STREAM_AT</h3>
+
+<p>webtransport-go's client, v0.11 and v0.12 alike, hard-requires
+<code>EnableStreamResetPartialDelivery</code> and fails with <em>"server didn't enable QUIC
+stream reset partial delivery"</em> against any server that does not negotiate it.</p>
+
+<p>No browser requires this. RESET_STREAM_AT is an extension, and a hard requirement on a
+non-negotiated extension makes the Go client unable to talk to conformant WebTransport
+servers, including <code>wtransport</code>, which this host runs on :4438.</p>
+
+<div class="code-block">
+<pre><span class="cm"># reproduces with either client version</span>
+go run ./client -url <span class="st">https://echo.semantic-ui.com:4438/echo</span>
+
+<span class="cm"># server didn't enable QUIC stream reset partial delivery</span></pre>
+</div>
+
+<p><b>Ask:</b> treat RESET_STREAM_AT as optional, or negotiate it rather than requiring it.</p>
+
+<p class="hint">Related: <a href="/exhibits/apple">the WebKit side</a> ·
+<a href="/compat">what this means if you are building on WebTransport</a></p>
+{{end}}
+
+{{define "script"}}
+<script>
+const DEFAULTS = [
+  { id: 'stock', port: 4433, name: 'Zero-config v0.12.0', advertises: 'WT_MAX_SESSIONS = 2^62−1, no WT_INITIAL_MAX_* settings' },
+  { id: 'complete', port: 4436, name: 'v0.11.0, trio sent unconditionally', advertises: 'WT_MAX_SESSIONS with all three flow-control settings' },
+];
+
+const REGRESSION = [
+  { id: 'new', port: 4440, name: 'v0.12.0 · quic-go v0.61.0, trio configured', advertises: 'nine identifiers' },
+  { id: 'old', port: 4436, name: 'v0.11.0 · quic-go v0.60.0', advertises: 'the same nine identifiers, byte for byte' },
+];
+
+function mountBoard(host, endpoints, runAllId, stateId) {
+  const state = new Map();
+
+  for (const endpoint of endpoints) {
+    const row = document.createElement('div');
+    row.className = 'endpoint';
+
+    const who = document.createElement('div');
+    who.className = 'who';
+    const name = document.createElement('div');
+    name.className = 'url';
+    name.textContent = endpoint.name;
+    const what = document.createElement('div');
+    what.className = 'what';
+    what.textContent = `${endpointURL(endpoint.port)} — ${endpoint.advertises}`;
+    who.append(name, what);
+
+    const run = document.createElement('button');
+    run.className = 'action';
+    run.textContent = 'Test';
+
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = 'untested';
+
+    row.append(who, run, chip);
+    document.querySelector(host).append(row);
+    state.set(endpoint.id, { chip, run });
+
+    run.onclick = async () => { busy(true); await runOne(endpoint); busy(false); };
+  }
+
+  async function runOne(endpoint) {
+    const { chip } = state.get(endpoint.id);
+    chip.className = 'chip running';
+    chip.textContent = 'testing…';
+    const result = await attempt(endpointURL(endpoint.port), {});
+    chip.className = `chip ${result.outcome}`;
+    chip.textContent = result.outcome === 'ready' ? `ready ${result.ms}ms` : `${result.outcome} ${result.ms}ms`;
+    chip.title = result.detail;
+  }
+
+  function busy(value) {
+    document.querySelector(runAllId).disabled = value;
+    for (const { run } of state.values()) run.disabled = value;
+  }
+
+  document.querySelector(runAllId).onclick = async () => {
+    const label = document.querySelector(stateId);
+    busy(true);
+    for (const endpoint of endpoints) {
+      label.textContent = `testing ${endpointURL(endpoint.port)}…`;
+      await runOne(endpoint);
+    }
+    label.textContent = '';
+    busy(false);
+  };
+}
+
+mountBoard('#defaults', DEFAULTS, '#run-defaults', '#run-defaults-state');
+mountBoard('#regression', REGRESSION, '#run-regression', '#run-regression-state');
+</script>
+{{end}}

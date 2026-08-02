@@ -2,7 +2,8 @@ FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY main.go page.html ./
+COPY main.go pages.go observe.go ./
+COPY web ./web
 RUN CGO_ENABLED=0 go build -o /wt-lab .
 
 # rung A builds from its own module so the v0.11.0 pin cannot drift with the control
@@ -10,7 +11,7 @@ FROM golang:1.26-alpine AS build-legacy
 WORKDIR /src
 COPY legacy/go.mod legacy/go.sum ./
 RUN go mod download
-COPY legacy/main.go ./
+COPY legacy/main.go legacy/observe.go ./
 RUN CGO_ENABLED=0 go build -o /wt-legacy .
 
 FROM rust:1-bookworm AS build-rust
