@@ -157,6 +157,7 @@ func main() {
 	keyFile := flag.String("key", "", "private key PEM path (le mode)")
 	bindHost := flag.String("bind", "", "UDP bind host (fly-global-services on Fly; empty = all interfaces)")
 	hashDir := flag.String("hashdir", "/tmp", "directory sibling listeners publish their leaf hashes into")
+	trioPort := flag.Int("trioport", 4440, "WebTransport UDP port that also sends the flow-control trio")
 	flag.Parse()
 
 	if err := os.MkdirAll(*qlogDir, 0o755); err != nil {
@@ -199,7 +200,7 @@ func main() {
 	// one server and one mux per port. Upgrade is a method on a specific
 	// webtransport.Server, so the two ports cannot share a handler — the
 	// default mux would route both to whichever server registered last
-	startWT := func(port int) {
+	startWT := func(port int, config *webtransport.Config) {
 		server := &webtransport.Server{
 			H3: &http3.Server{
 				Addr:      fmt.Sprintf("%s:%d", *bindHost, port),
@@ -208,6 +209,8 @@ func main() {
 					Tracer: qlog.DefaultConnectionTracer,
 				},
 			},
+			// nil leaves the library's defaults alone, which is the control
+			Config: config,
 			// the page and the endpoint are always different origins
 			CheckOrigin: func(*http.Request) bool { return true },
 		}
@@ -306,15 +309,24 @@ func main() {
 	}
 	go func() { log.Fatal(caServer.ListenAndServe()) }()
 
-	log.Printf("wt-lab boot wt=:%d,:443 page=:%d qlog=%s", *port, *pagePort, *qlogDir)
+	log.Printf("wt-lab boot wt=:%d,:443 trio=:%d page=:%d qlog=%s", *port, *trioPort, *pagePort, *qlogDir)
 	log.Printf("certHash=%s notAfter=%s sans=%v keyUsage=DigitalSignature isCA=false", hash, time.Now().Add(10*24*time.Hour).Format(time.RFC3339), hosts)
 	log.Printf("one-time iPad setup: http://<host-lan-ip>:%d/ downloads the CA profile — install in Settings, then enable full trust in General > About > Certificate Trust Settings", *pagePort+1)
 	log.Printf("tap: https://<host-lan-ip>:%d/", *pagePort)
 
-	startWT(*port)
+	startWT(*port, nil)
 	// clients that only ever try the default port are a live hypothesis, so
 	// the endpoint answers on 443/udp too
-	startWT(443)
+	startWT(443, nil)
+	// v0.12 does not send the WebTransport flow-control trio unless asked. these
+	// are the values v0.11 hardcodes, so this port differs from the v0.11 rung
+	// by library version and nothing else. 1<<60 is exactly where the stream
+	// limits clip, so they arrive on the wire unrounded
+	startWT(*trioPort, &webtransport.Config{
+		MaxIncomingStreams:    1 << 60,
+		MaxIncomingUniStreams: 1 << 60,
+		MaxIncomingData:       1 << 60,
+	})
 	log.Fatal(page.ListenAndServeTLS("", ""))
 }
 

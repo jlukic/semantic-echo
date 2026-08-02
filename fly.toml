@@ -72,6 +72,17 @@ primary_region = 'iad'
   [[services.ports]]
     port = 6443
 
+# the v0.12 control again, this time configured to send the flow-control trio
+[[services]]
+  protocol = 'udp'
+  internal_port = 4440
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 4440
+
 # rung B: rust wtransport over quinn
 [[services]]
   protocol = 'udp'
