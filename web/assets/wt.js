@@ -70,15 +70,17 @@ const describe = error => {
   return parts.join(' ');
 };
 
-/* Safari exposes the datagram streams as createWritable()/createReadable()
-   factories rather than the accessors the specification settled on. */
+/* The specification replaced datagrams.writable with createWritable() in 2025.
+   Safari ships the current shape, Chrome still ships the old attribute, and
+   Firefox carries both. readable is an accessor on every engine: there is no
+   createReadable() in the specification or in any implementation. */
 const datagramStreams = session => {
   const datagrams = session.datagrams || {};
-  const factory = name => typeof datagrams[name] === 'function' ? datagrams[name]() : null;
+  const modern = typeof datagrams.createWritable === 'function';
   return {
-    writable: datagrams.writable || factory('createWritable'),
-    readable: datagrams.readable || factory('createReadable'),
-    shape: datagrams.writable ? 'accessors' : (typeof datagrams.createWritable === 'function' ? 'factories' : 'absent'),
+    writable: modern ? datagrams.createWritable() : datagrams.writable,
+    readable: datagrams.readable,
+    shape: modern ? 'createWritable()' : (datagrams.writable ? 'writable' : 'absent'),
   };
 };
 
@@ -177,7 +179,7 @@ const echoOnce = async (session, log) => {
     log('no datagram API in this runtime; session is established regardless');
     return 'established, no datagram API';
   }
-  if (shape === 'factories') log('datagram streams via createWritable()/createReadable()', 'dim');
+  if (shape === 'createWritable()') log('datagrams via createWritable(), the current specification shape', 'dim');
 
   const started = performance.now();
   const writer = writable.getWriter();
@@ -306,11 +308,51 @@ const setTheme = next => {
   try { localStorage.setItem('theme', next); } catch (error) { /* private mode */ }
 };
 
+/* A tab group with a sliding indicator. The slider is positioned from measured
+   geometry, and a group nested in a closed <details> has none until it opens,
+   so the first placement waits for that rather than happening on load. */
+const initTabs = tabs => {
+  const bar = tabs.querySelector('.bar');
+  const buttons = [...bar.querySelectorAll('.tab')];
+  if (!buttons.length) { return; }
+
+  const slider = document.createElement('div');
+  slider.className = 'tab-slider';
+  bar.append(slider);
+
+  const place = button => {
+    slider.style.width = `${button.offsetWidth}px`;
+    slider.style.transform = `translateX(${button.offsetLeft - bar.scrollLeft}px)`;
+  };
+  const current = () => bar.querySelector('.tab.active') || buttons[0];
+
+  for (const button of buttons) {
+    button.onclick = () => {
+      for (const other of buttons) { other.classList.remove('active'); }
+      for (const panel of tabs.querySelectorAll(':scope > .content')) { panel.classList.remove('active'); }
+      button.classList.add('active');
+      document.getElementById(button.dataset.content)?.classList.add('active');
+      place(button);
+    };
+  }
+
+  const details = tabs.closest('details');
+  if (details && !details.open) {
+    details.addEventListener('toggle', () => { if (details.open) { place(current()); } });
+  }
+  else { place(current()); }
+
+  bar.addEventListener('scroll', () => place(current()));
+  addEventListener('resize', () => place(current()));
+};
+
 const initChrome = () => {
   const toggle = document.querySelector('#theme-toggle');
   if (toggle) {
     toggle.onclick = () => setTheme(document.documentElement.classList.contains('dark') ? 'light' : 'dark');
   }
+
+  for (const tabs of document.querySelectorAll('.tabs')) { initTabs(tabs); }
 
   for (const block of document.querySelectorAll('.code-block')) {
     const button = document.createElement('button');

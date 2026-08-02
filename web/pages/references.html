@@ -1,0 +1,309 @@
+{{define "content"}}
+<p class="intro">Additional information about the claims made on this website can be found
+from the following references.</p>
+
+<h2><span class="icon" style="mask-image: var(--icon-book)"></span>Specifications and drafts</h2>
+
+<div class="table-wrap"><table class="refs">
+  <thead><tr><th>Source</th><th>Description</th><th>Date</th></tr></thead>
+  <tbody id="ref-specs"></tbody>
+</table></div>
+
+<h2><span class="icon" style="mask-image: var(--icon-triangle-alert)"></span>Safari and WebKit</h2>
+
+<div class="table-wrap"><table class="refs">
+  <thead><tr><th>Source</th><th>Description</th><th>Date</th></tr></thead>
+  <tbody id="ref-webkit"></tbody>
+</table></div>
+
+<h2><span class="icon" style="mask-image: var(--icon-bug)"></span>Chrome and Firefox</h2>
+
+<div class="table-wrap"><table class="refs">
+  <thead><tr><th>Source</th><th>Description</th><th>Date</th></tr></thead>
+  <tbody id="ref-blink-gecko"></tbody>
+</table></div>
+
+<h2><span class="icon" style="mask-image: var(--icon-shield-alert)"></span>Certificates</h2>
+
+<div class="table-wrap"><table class="refs">
+  <thead><tr><th>Source</th><th>Description</th><th>Date</th></tr></thead>
+  <tbody id="ref-certificates"></tbody>
+</table></div>
+
+<h2><span class="icon" style="mask-image: var(--icon-network)"></span>Server implementations</h2>
+
+<div class="table-wrap"><table class="refs">
+  <thead><tr><th>Source</th><th>Description</th><th>Date</th></tr></thead>
+  <tbody id="ref-servers"></tbody>
+</table></div>
+
+<h2><span class="icon" style="mask-image: var(--icon-flask-conical)"></span>Further reading</h2>
+
+<div class="table-wrap"><table class="refs">
+  <thead><tr><th>Source</th><th>Description</th><th>Date</th></tr></thead>
+  <tbody id="ref-further"></tbody>
+</table></div>
+{{end}}
+
+{{define "script"}}
+<script>
+/* One row per citation, grouped by the table it belongs to. Kept as data rather
+   than markup so a claim and its source cannot drift apart across pages. */
+const REFERENCES = {
+  "specs": [
+      {
+          "claim": "The HTTP/3 binding, and the SETTINGS this host advertises",
+          "title": "draft-ietf-webtrans-http3-16, in WG Last Call",
+          "url": "https://datatracker.ietf.org/doc/draft-ietf-webtrans-http3/",
+          "note": "draft-16 removed WT_MAX_SESSIONS in favour of SETTINGS_WT_ENABLED. Deployed servers and browsers are still on the earlier shape.",
+          "date": "2026-07-06"
+      },
+      {
+          "claim": "The HTTP/2 binding that Safari falls back to",
+          "title": "draft-ietf-webtrans-http2-15",
+          "url": "https://datatracker.ietf.org/doc/draft-ietf-webtrans-http2/",
+          "date": "2026-07-06"
+      },
+      {
+          "claim": "Chrome and Safari still send the legacy :protocol token rather than webtransport-h3",
+          "title": "quic-go/webtransport-go#280, merged",
+          "url": "https://github.com/quic-go/webtransport-go/pull/280",
+          "note": "The PR's validation notes record Safari 26.5 sending :protocol = \"webtransport\".",
+          "date": "2026-06-14"
+      },
+      {
+          "claim": "datagrams.writable was removed from the specification in favour of createWritable()",
+          "title": "w3c/webtransport#638, merged",
+          "url": "https://github.com/w3c/webtransport/pull/638",
+          "date": "2025-04-08"
+      },
+      {
+          "claim": "WebTransport specification, including the certificate rules and the construction algorithm",
+          "title": "W3C WebTransport, Editor's Draft",
+          "url": "https://w3c.github.io/webtransport/",
+          "living": true
+      }
+  ],
+  "webkit": [
+      {
+          "claim": "Flow-control credit is never released on FIN or RESET, deadlocking at 16 MB or 7,600 streams",
+          "title": "WebKit 319818, Flow control never refills (NEW)",
+          "url": "https://bugs.webkit.org/show_bug.cgi?id=319818",
+          "note": "Confirmed still open 2026-08-02. The reporter clarifies this is QUIC-level flow control.",
+          "date": "2026-07-20"
+      },
+      {
+          "claim": "Safari requires WT_MAX_SESSIONS, and ready hangs without it",
+          "title": "quic-go/webtransport-go#261, merged",
+          "url": "https://github.com/quic-go/webtransport-go/pull/261",
+          "note": "Symptom report in issue #262. That issue's diagnosis was wrong; only the symptom and this fix are reliable.",
+          "date": "2026-06-14"
+      },
+      {
+          "claim": "The headers option is unimplemented in Safari",
+          "title": "WebKit 311299, headers and responseHeaders (NEW)",
+          "url": "https://bugs.webkit.org/show_bug.cgi?id=311299",
+          "date": "2026-04-01"
+      },
+      {
+          "claim": "Safari falls back to HTTP/2 over TCP when QUIC cannot get through",
+          "title": "WebKit Features in Safari 26.4",
+          "url": "https://webkit.org/blog/17862/webkit-features-for-safari-26-4/",
+          "note": "\"When the underlying network environment doesn't support QUIC, WebTransport can run over HTTP/2 and TCP as a fallback with the same API.\"",
+          "date": "2026-03-24"
+      },
+      {
+          "claim": "WebTransport on Apple platforms is glue over Network.framework",
+          "title": "WebKit source, NetworkTransportSessionCocoa.mm",
+          "url": "https://github.com/WebKit/WebKit/blob/f829d55f99a8880786d653e93c8fe3c941365354/Source/WebKit/NetworkProcess/webtransport/cocoa/NetworkTransportSessionCocoa.mm",
+          "note": "63 distinct nw_* symbols. WebKit never sets ALPN or QUIC flow control itself.",
+          "living": true
+      },
+      {
+          "claim": "The floor is the OS version, not the Safari version",
+          "title": "WebKit source, PlatformHave.h, HAVE_WEBTRANSPORT",
+          "url": "https://github.com/WebKit/WebKit/blob/f829d55f99a8880786d653e93c8fe3c941365354/Source/WTF/wtf/PlatformHave.h#L1985-L1989",
+          "note": "Gated on __MAC_OS_X_VERSION_MIN_REQUIRED and __IPHONE_OS_VERSION_MIN_REQUIRED >= 260400.",
+          "living": true
+      },
+      {
+          "claim": "WKWebView support is unconfirmed",
+          "title": "MDN browser-compat-data, api/WebTransport.json",
+          "url": "https://developer.mozilla.org/en-US/docs/Web/API/WebTransport",
+          "note": "BCD records webview_ios as \"mirror\", an inherit-from-Safari default rather than measured data.",
+          "living": true
+      }
+  ],
+  "blink-gecko": [
+      {
+          "claim": "Firefox 155 adds draining and createSendGroup",
+          "title": "Bugzilla 2007160 and 2007165, both RESOLVED FIXED",
+          "url": "https://bugzilla.mozilla.org/show_bug.cgi?id=2007160",
+          "date": "2026-07-29"
+      },
+      {
+          "claim": "Chrome requires a known root for QUIC, not merely a trusted one",
+          "title": "Nick Harper, chromium net-dev",
+          "url": "https://groups.google.com/a/chromium.org/g/net-dev/c/nCkjbekSCWA",
+          "note": "Chrome exposes --webtransport-developer-mode to disable the known-root check.",
+          "date": "2025-02-25"
+      },
+      {
+          "claim": "Firefox implemented serverCertificateHashes correctly from 125; earlier versions layered it on top of PKI",
+          "title": "Bugzilla 1873263, RESOLVED FIXED in Firefox 125",
+          "url": "https://bugzilla.mozilla.org/show_bug.cgi?id=1873263",
+          "date": "2024-03-06"
+      },
+      {
+          "claim": "Chrome's maxDatagramSize is hardcoded to 1024, and getStats/congestionControl are not enabled in stable",
+          "title": "MDN browser-compat-data, api/WebTransport.json",
+          "url": "https://developer.mozilla.org/en-US/docs/Web/API/WebTransport",
+          "living": true
+      },
+      {
+          "claim": "Firefox's getStats() throws, and protocol is unimplemented",
+          "title": "MDN browser-compat-data, api/WebTransport.json",
+          "url": "https://developer.mozilla.org/en-US/docs/Web/API/WebTransport/getStats",
+          "living": true
+      }
+  ],
+  "certificates": [
+      {
+          "claim": "Pinned hashes replace chain validation rather than adding to it",
+          "title": "W3C WebTransport, verify a certificate hash",
+          "url": "https://w3c.github.io/webtransport/#verify-a-certificate-hash",
+          "living": true
+      },
+      {
+          "claim": "SHA-256 over the leaf DER, not the SPKI",
+          "title": "W3C WebTransport, compute a certificate hash",
+          "url": "https://w3c.github.io/webtransport/#compute-a-certificate-hash",
+          "note": "The competing SPKI convention is real: Chromium's --ignore-certificate-errors-spki-list takes an SPKI hash that looks identical in base64.",
+          "living": true
+      },
+      {
+          "claim": "Total validity must not exceed two weeks",
+          "title": "W3C WebTransport, custom certificate requirements",
+          "url": "https://w3c.github.io/webtransport/#custom-certificate-requirements",
+          "note": "Enforced independently in WebKit, Chromium (kCustomCertificateMaxValidityDays = 14) and Firefox (ERROR_VALIDITY_TOO_LONG).",
+          "living": true
+      },
+      {
+          "claim": "RSA keys are excluded",
+          "title": "W3C WebTransport, custom certificate requirements",
+          "url": "https://w3c.github.io/webtransport/#custom-certificate-requirements",
+          "note": "Chrome additionally accepts P-384 and Ed25519, so P-256 is the interoperability floor rather than a Chrome requirement.",
+          "living": true
+      },
+      {
+          "claim": "allowPooling with hashes must throw NotSupportedError",
+          "title": "W3C WebTransport, construction algorithm",
+          "url": "https://w3c.github.io/webtransport/",
+          "note": "Specification-mandated. Safari throws it because it is the only engine implementing allowPooling.",
+          "living": true
+      }
+  ],
+  "servers": [
+      {
+          "claim": "webtransport-go v0.12 changed which SETTINGS a zero-config server advertises",
+          "title": "quic-go/webtransport-go#261, merged",
+          "url": "https://github.com/quic-go/webtransport-go/pull/261",
+          "date": "2026-06-14"
+      },
+      {
+          "claim": "Interop results across implementations and real browsers",
+          "title": "QUIC and WebTransport Interop Runner",
+          "url": "https://interop.seemann.io/",
+          "living": true
+      }
+  ],
+  "further": [
+      {
+          "claim": "Measured QUIC reachability",
+          "title": "Langley et al., SIGCOMM '17, section 7.2",
+          "url": "https://doi.org/10.1145/3098822.3098842",
+          "note": "4.4% of Google video clients could not use QUIC in November 2016, concentrated in enterprise networks. RFC 9308 separately cites 3-5% of networks blocking UDP. Both are old and neither has a modern replacement.",
+          "date": "2017-08-07"
+      },
+      {
+          "claim": "WebTransport as an Interop 2026 focus area",
+          "title": "web-platform-tests/interop, 2026",
+          "url": "https://github.com/web-platform-tests/interop/blob/main/2026/README.md#webtransport",
+          "living": true
+      },
+      {
+          "claim": "Machine-readable Baseline status",
+          "title": "api.webstatus.dev, webtransport",
+          "url": "https://api.webstatus.dev/v1/features/webtransport",
+          "note": "Baseline \"newly\" since 2026-03-24. Widely available is 30 months later, around September 2028.",
+          "living": true
+      },
+      {
+          "claim": "WebKit's open WebTransport bugs",
+          "title": "bugs.webkit.org, open WebTransport bugs",
+          "url": "https://bugs.webkit.org/buglist.cgi?quicksearch=WebTransport",
+          "living": true
+      },
+      {
+          "claim": "Gecko's WebTransport meta bug",
+          "title": "Bugzilla 1709355, Gecko WebTransport meta",
+          "url": "https://bugzilla.mozilla.org/show_bug.cgi?id=1709355",
+          "living": true
+      }
+  ],
+};
+
+// the site shows dates as MM-DD-YYYY; rows carry ISO so they sort
+const asDate = iso => {
+  const [year, month, day] = iso.split('-');
+  return `${month}-${day}-${year}`;
+};
+
+for (const [group, rows] of Object.entries(REFERENCES)) {
+  const body = document.querySelector(`#ref-${group}`);
+  if (!body) { continue; }
+
+  if (!rows.length) {
+    const empty = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 3;
+    cell.className = 'secondary';
+    cell.textContent = 'Not yet compiled.';
+    empty.append(cell);
+    body.append(empty);
+    continue;
+  }
+
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+
+    const source = document.createElement('td');
+    if (row.url) {
+      const link = document.createElement('a');
+      link.href = row.url;
+      link.textContent = row.title;
+      source.append(link);
+    }
+    else { source.append(document.createTextNode(row.title)); }
+
+    const date = document.createElement('td');
+    date.className = row.date ? 'date' : 'date none';
+    date.textContent = row.date ? asDate(row.date) : (row.living ? 'N/A' : '');
+
+    // the caveat belongs with what is being described, not with the link
+    const description = document.createElement('td');
+    description.className = 'secondary';
+    description.textContent = row.claim;
+    if (row.note) {
+      const note = document.createElement('div');
+      note.className = 'hint';
+      note.textContent = row.note;
+      description.append(note);
+    }
+
+    tr.append(source, description, date);
+    body.append(tr);
+  }
+}
+</script>
+{{end}}

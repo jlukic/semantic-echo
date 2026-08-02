@@ -5,10 +5,15 @@ import (
 	"net/http"
 )
 
+// bump when the claims change, not when the code does. readers of a page about a
+// moving target need to know how old the reading is
+const contentUpdated = "08-02-2026"
+
 type page struct {
 	Title       string
 	Description string
 	Nav         string
+	Updated     string
 }
 
 // every route this host serves as HTML. the exhibits are deliberately absent
@@ -28,9 +33,14 @@ var pageSpecs = map[string]struct {
 		Description: "What each engine requires of a WebTransport server, what it silently discards, and what breaks. Safari and iOS in detail, tested live against a public echo.",
 		Nav:         "compat",
 	}},
+	"/references": {"references.html", page{
+		Title:       "WebTransport references and sources",
+		Description: "Primary sources for every claim on this site: specifications and drafts, WebKit and Chromium bug reports, and the measurements taken against this host.",
+		Nav:         "references",
+	}},
 	"/exhibits/apple": {"exhibit-apple.html", page{
 		Title:       "Exhibit — iOS 27 refuses valid WebTransport handshakes",
-		Description: "Two servers advertising byte-identical h3 SETTINGS and QUIC transport parameters. Safari on iOS 27 establishes a session against one and refuses the other.",
+		Description: "Two servers whose advertised h3 SETTINGS and QUIC transport parameters match on every value compared. Safari on iOS 27 establishes a session against one and refuses the other.",
 	}},
 	"/exhibits/quic-go": {"exhibit-quicgo.html", page{
 		Title:       "Exhibit — quic-go and webtransport-go",
@@ -49,7 +59,9 @@ func parsePages() {
 
 func renderPage(w http.ResponseWriter, route string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := templates[route].ExecuteTemplate(w, "layout", pageSpecs[route].page); err != nil {
+	data := pageSpecs[route].page
+	data.Updated = contentUpdated
+	if err := templates[route].ExecuteTemplate(w, "layout", data); err != nil {
 		// the response is already partly written by the time a template can
 		// fail, so there is nothing useful to say to the client
 		return

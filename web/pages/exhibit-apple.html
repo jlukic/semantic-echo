@@ -1,15 +1,18 @@
 {{define "content"}}
 <p class="category">Exhibit · WebKit and Network.framework</p>
 
-<h2><span class="icon" style="mask-image: var(--icon-flask-conical)"></span>iOS 27 refuses valid WebTransport handshakes</h2>
+<h2><span class="icon" style="mask-image: var(--icon-flask-conical)"></span>An unexplained Safari refusal</h2>
 
-<p class="intro">Two servers on this host advertise byte-identical h3 SETTINGS and
-byte-identical QUIC transport parameters. Safari on iOS 27.0 beta establishes a session
-against one and refuses the other. Chrome and Firefox bind both.</p>
+<p class="intro">Two servers on this host present the same advertised values, as far as
+they have been compared, and Safari on iOS 27.0 beta establishes a session against one
+while refusing the other. Chrome and Firefox accept both. This page is a live reproduction
+and the wire evidence, published so that anyone with better visibility into WebKit can
+identify what is missing from it.</p>
 
 <div class="callout warning">
-<p>Measured on <b>iOS 27.0 beta</b>, six for six, on two devices across two networks.
-Not yet confirmed against a release build.</p>
+<p>Observed on <b>iOS 27.0 beta</b> only, six attempts for six, on two devices across two
+networks. Not confirmed against a release build, and not yet reproduced by anyone outside
+this project.</p>
 </div>
 
 <h3>The pair</h3>
@@ -50,8 +53,8 @@ roughly 50&nbsp;ms after construction.</p>
 <div class="table-wrap"><table>
   <thead><tr><th></th><th>:4440</th><th>:4436</th></tr></thead>
   <tbody>
-    <tr><td>h3 SETTINGS</td><td class="secondary" colspan="2">Identical, nine identifiers, byte for byte</td></tr>
-    <tr><td>QUIC transport parameters</td><td class="secondary" colspan="2">Identical, measured</td></tr>
+    <tr><td>h3 SETTINGS</td><td class="secondary" colspan="2">Nine identifiers, matching on every value compared</td></tr>
+    <tr><td>QUIC transport parameters</td><td class="secondary" colspan="2">Matching on every value compared</td></tr>
     <tr><td>Certificate</td><td class="secondary" colspan="2">The same Let's Encrypt chain</td></tr>
     <tr><td>Echo handler</td><td class="secondary" colspan="2">The same code</td></tr>
     <tr><td>Server build</td><td class="secondary">webtransport-go v0.12.0 · quic-go v0.61.0</td><td class="secondary">webtransport-go v0.11.0 · quic-go v0.60.0</td></tr>
@@ -60,8 +63,17 @@ roughly 50&nbsp;ms after construction.</p>
   </tbody>
 </table></div>
 
-<p>Because every advertised value matches, the input Safari is reacting to is something
-neither peer announces: frame encoding, capsule handling or sequencing.</p>
+<p>If that comparison is complete, then what Safari reacts to is not an advertised value
+at all, which would put it in frame encoding, capsule handling or sequencing. That
+inference is worth exactly as much as the comparison behind it, and the comparison was made
+by reading decoded values rather than by diffing raw frames. The captures are published
+below so the inference can be checked rather than taken on trust.</p>
+
+<p class="hint"><b>Where this is weakest.</b> Two dependencies move between those builds,
+webtransport-go and quic-go together, so this is not a one-variable comparison. Pinning
+webtransport-go v0.11.0 against quic-go v0.61.0 as a fifth endpoint would separate them.
+Until that endpoint exists, neither library can be singled out, and an interaction between
+the two cannot be ruled out.</p>
 
 <hr class="sep">
 
@@ -96,8 +108,8 @@ pair</a> · <a href="/compat">what this means if you are building on WebTranspor
 {{define "script"}}
 <script>
 const PAIR = [
-  { id: 'trio', port: 4440, name: 'v0.12.0 with the flow-control settings sent', advertises: 'WT_MAX_SESSIONS and all three WT_INITIAL_MAX_* settings' },
-  { id: 'validated', port: 4436, name: 'v0.11.0, byte-identical SETTINGS', advertises: 'the same nine identifiers, byte for byte' },
+  { id: 'trio', port: 4440, name: 'v0.12.0 · quic-go v0.61.0', advertises: 'WT_MAX_SESSIONS and all three WT_INITIAL_MAX_* settings' },
+  { id: 'validated', port: 4436, name: 'v0.11.0 · quic-go v0.60.0', advertises: 'the same nine identifiers' },
 ];
 
 const CONDITIONAL = [

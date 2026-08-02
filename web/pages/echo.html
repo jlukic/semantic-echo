@@ -11,7 +11,15 @@ the <a href="/compat">Compatibility</a> tab.</p>
 <details class="snippets">
 <summary>Connecting to this echo from a browser, Node, Go or Rust</summary>
 
-<p class="category">Browser</p>
+<div class="tabs">
+<div class="bar">
+  <button class="tab active" data-content="example-browser">Browser</button>
+  <button class="tab" data-content="example-node">Node</button>
+  <button class="tab" data-content="example-go">Go</button>
+  <button class="tab" data-content="example-rust">Rust</button>
+</div>
+
+<div id="example-browser" class="content active">
 <div class="code-block">
 <pre><span class="kw">const</span> wt = <span class="kw">new</span> <span class="fn">WebTransport</span>(<span class="st">'https://echo.semantic-ui.com/echo'</span>);
 <span class="kw">await</span> wt.ready;
@@ -22,10 +30,13 @@ the <a href="/compat">Compatibility</a> tab.</p>
 <span class="kw">const</span> reader = wt.datagrams.readable.<span class="fn">getReader</span>();
 <span class="kw">const</span> { value } = <span class="kw">await</span> reader.<span class="fn">read</span>();  <span class="cm">// "hello"</span></pre>
 </div>
-<p class="hint">On Safari those two streams are <code>createWritable()</code> and
-<code>createReadable()</code> factories rather than accessors. Feature-detect both shapes.</p>
+<p class="hint">The specification replaced <code>datagrams.writable</code> with
+<code>createWritable()</code> in 2025. Safari ships the current shape and Chrome still ships
+the old attribute, so feature-detect the writer. <code>readable</code> is an accessor on
+every engine.</p>
+</div>
 
-<p class="category">Node</p>
+<div id="example-node" class="content">
 <div class="code-block">
 <pre><span class="kw">import</span> { WebTransport } <span class="kw">from</span> <span class="st">'@fails-components/webtransport'</span>;
 
@@ -37,8 +48,9 @@ the <a href="/compat">Compatibility</a> tab.</p>
 </div>
 <p class="hint">Nothing in Node terminates or dials WebTransport without a native addon.
 This package is the one with production use behind it.</p>
+</div>
 
-<p class="category">Go</p>
+<div id="example-go" class="content">
 <div class="code-block">
 <pre><span class="kw">var</span> transport webtransport.Transport
 
@@ -53,8 +65,9 @@ fmt.<span class="fn">Println</span>(<span class="kw">string</span>(echo)) <span 
 </div>
 <p class="hint">The Go client requires the peer to negotiate RESET_STREAM_AT, which no
 browser does. It reaches the Go endpoints here but not <code>:4438</code>.</p>
+</div>
 
-<p class="category">Rust</p>
+<div id="example-rust" class="content">
 <div class="code-block">
 <pre><span class="kw">let</span> config = ClientConfig::<span class="fn">default</span>();
 
@@ -64,6 +77,8 @@ browser does. It reaches the Go endpoints here but not <code>:4438</code>.</p>
 
 connection.<span class="fn">send_datagram</span>(<span class="st">b"hello"</span>)?;
 <span class="kw">let</span> echo = connection.<span class="fn">receive_datagram</span>().<span class="kw">await</span>?;</pre>
+</div>
+</div>
 </div>
 </details>
 

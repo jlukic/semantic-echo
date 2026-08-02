@@ -75,6 +75,12 @@ html.dark {
 
     .sep { color: var(--border-color); }
 
+    .updated {
+      color: var(--light-text-color);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
     .theme-toggle {
       background: none;
       border: none;
@@ -314,9 +320,53 @@ table {
 
     &.secondary { color: var(--muted-text-color); }
     &.mono { font-family: var(--code-font); font-size: var(--text-xs); }
+
+    .hint { margin-top: var(--margin-3xs); font-size: var(--text-xs); }
+
+    &.date {
+      color: var(--light-text-color);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    /* a source with no fixed date is a weaker signal than a dated one, so it
+       reads quieter rather than competing with the dates around it */
+    &.date.none { color: var(--standard-30); }
   }
 
   tr:hover td { background: var(--table-hover); }
+}
+
+/* Reference tables hold one shape across the page, so a reader scanning down
+   finds the source, the description and the date in the same places every time. */
+table.refs {
+  table-layout: fixed;
+
+  th:nth-child(1), td:nth-child(1) { width: 30%; }
+  th:nth-child(3), td:nth-child(3) { width: 7rem; }
+}
+
+@media (max-width: 640px) {
+  table.refs {
+    th:nth-child(1), td:nth-child(1) { width: 38%; }
+    th:nth-child(3), td:nth-child(3) { width: 6rem; }
+  }
+}
+
+/* Two-column tables pin their label column to one width, so a page made mostly
+   of them keeps a single left edge as it scrolls rather than reflowing per
+   table. Selected by shape, so a table gains this by being two columns wide
+   and not by remembering to add a class. */
+table:has(> tbody > tr > td:nth-child(2):last-child) {
+  table-layout: fixed;
+
+  th:first-child, td:first-child { width: 34%; }
+}
+
+@media (max-width: 640px) {
+  table:has(> tbody > tr > td:nth-child(2):last-child) {
+    th:first-child, td:first-child { width: 42%; }
+  }
 }
 
 /*******************************
@@ -482,7 +532,7 @@ button.action {
     place-content: center;
     width: 1.15em;
     height: 1.15em;
-    margin: 0.22em 0 0;
+    margin: 0.05em 0 0;
     flex-shrink: 0;
     border: var(--border);
     border-radius: 0.3em;
@@ -539,9 +589,54 @@ button.action {
 
   &[open] summary { margin-bottom: var(--margin-xs); }
 
-  .category { margin-top: var(--margin); }
-  .code-block { margin: var(--margin-3xs) 0 var(--margin-2xs); }
-  .hint { margin-top: 0; }
+  .tabs { margin-top: var(--margin); }
+  .code-block { margin: 0 0 var(--margin-s); }
+  .hint { margin-top: 0; margin-bottom: 0; }
+}
+
+.tabs {
+  .bar {
+    display: flex;
+    position: relative;
+    gap: 0;
+    border-bottom: 3px solid var(--standard-10);
+    overflow-x: auto;
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar { display: none; }
+  }
+
+  /* positioned from JS, because a tab's width is only knowable once the
+     surrounding details element has been opened and laid out */
+  .tab-slider {
+    position: absolute;
+    bottom: -3px;
+    left: 0;
+    height: 3px;
+    background: var(--primary-color);
+    border-radius: 1px;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .tab {
+    padding: var(--padding-xs) var(--padding) var(--padding-2xs);
+    font-family: var(--page-font);
+    font-size: var(--text-s);
+    font-weight: var(--bold);
+    background: none;
+    border: none;
+    cursor: pointer;
+    white-space: nowrap;
+    color: var(--light-text-color);
+    transition: color 0.15s;
+
+    &:hover { color: var(--muted-text-color); }
+    &.active { color: var(--header-color); }
+  }
+
+  > .content { display: none; padding-top: var(--padding-s); }
+  > .content.active { display: block; }
 }
 
 .budget { margin-top: var(--margin-s); }

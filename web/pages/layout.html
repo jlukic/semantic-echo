@@ -17,6 +17,8 @@
   <div class="header">
     <h1>WebTransport Echo</h1>
     <div class="links">
+      <span class="updated" title="When these claims were last reviewed">Updated {{.Updated}}</span>
+      <span class="sep">·</span>
       <a href="https://github.com/jlukic/semantic-echo">Source</a>
       <span class="sep">·</span>
       <button class="theme-toggle" id="theme-toggle" title="Switch theme"></button>
@@ -25,6 +27,7 @@
   <nav class="navigation">
     <a href="/"{{if eq .Nav "echo"}} class="active"{{end}}>Echo</a>
     <a href="/compat"{{if eq .Nav "compat"}} class="active"{{end}}>Compatibility</a>
+    <a href="/references"{{if eq .Nav "references"}} class="active"{{end}}>References</a>
   </nav>
 </div>
 
@@ -34,6 +37,7 @@
 <div class="footer">
   <a href="/">Echo</a>
   <a href="/compat">Compatibility</a>
+  <a href="/references">References</a>
   <a href="https://github.com/jlukic/semantic-echo">Source</a>
   <a href="https://w3c.github.io/webtransport/">Specification</a>
 </div>

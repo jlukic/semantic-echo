@@ -15,8 +15,9 @@ const reader = wt.datagrams.readable.getReader();
 const { value } = await reader.read();       // "hello"
 ```
 
-On Safari those two streams are `createWritable()` and `createReadable()` factories
-rather than the accessors above. Feature-detect both shapes.
+The specification replaced `datagrams.writable` with `createWritable()` in 2025. Safari
+ships the current shape and Chrome still ships the old attribute, so feature-detect the
+writer. `readable` is an accessor on every engine.
 
 The page dials any WebTransport URL, reports which endpoints your browser will establish
 a session against, and shows what the server observed during the attempt. That last part
@@ -33,7 +34,7 @@ They differ in what they advertise during the handshake.
 | `/echo` (443/udp) | `WT_MAX_SESSIONS`, no flow-control settings |
 | `:4433/echo` | the same, on a non-default port |
 | `:4440/echo` | `WT_MAX_SESSIONS` and all three `WT_INITIAL_MAX_*` settings |
-| `:4436/echo` | byte-identical SETTINGS to `:4440`, older server build |
+| `:4436/echo` | the same SETTINGS as `:4440`, older server build |
 | `:4438/echo` | `WT_MAX_SESSIONS = 1` at the legacy codepoint, independent implementation |
 
 Three more serve the same echo behind a self-signed P-256 leaf pinned by hash, so
@@ -50,14 +51,15 @@ serves Chrome and Firefox is not thereby a server that serves Safari.
 It requires `WT_MAX_SESSIONS`. Omit it and `ready` never resolves and never rejects, so
 keep a client-side timeout or the page hangs forever.
 
-If that value exceeds 1, the three `WT_INITIAL_MAX_*` settings are required alongside
-it. The conditional comes from draft-13. Safari enforces it, no other engine does, and a
-server advertising the former without the latter is refused before CONNECT.
+Send the three `WT_INITIAL_MAX_*` settings alongside it whenever it exceeds 1. The draft
+does not require this, but advertising `WT_MAX_SESSIONS` above 1 switches flow control on
+while all three settings default to 0, so the session opens with no credit. Other engines
+tolerate that; Safari refuses before CONNECT.
 
-Meeting both is still not sufficient. Two endpoints here advertise byte-identical h3
-SETTINGS and byte-identical QUIC transport parameters, and Safari establishes a session
-against one while refusing the other. Whatever it reacts to is not a value either side
-advertises, so auditing your own configuration will not find it.
+Meeting both is still not sufficient. Matching every advertised value is not a guarantee
+of matching behavior: two endpoints here send the same SETTINGS and transport parameters
+from different generations of one Go library, and Safari accepts one while refusing the
+other. What it reacts to has not been identified.
 
 Every `WebTransportError` carries an empty message. Invalid settings, TLS rejection and
 wire-level refusal are indistinguishable from the client, so put your diagnostics
@@ -65,19 +67,26 @@ server-side or you will not have any.
 
 User-installed root CAs are ignored. TLS rejects with `certificate_unknown` even at full
 trust, so a local CA that works for page loads fails here. Develop against hash pinning
-or real WebPKI, nothing between.
+or real WebPKI, nothing between. This one was measured rather than read from a source, and
+WebKit's own trust path would honor a user root, which places the rejection inside
+Network.framework.
 
 Flow-control credit is never released on FIN or RESET
 ([319818](https://bugs.webkit.org/show_bug.cgi?id=319818)), so the connection deadlocks
 at 16 MB or 7,600 streams, whichever comes first.
 
-The floor is iOS and macOS 26.4 rather than Safari 26.4, because it is gated on the OS
-version. The wire implementation lives in Network.framework, so an OS point release can
+The floor is iOS and macOS 26.4 rather than Safari 26.4, because the operating system
+version decides this and not the browser version. The wire implementation lives in Network.framework, so an OS point release can
 change SETTINGS handling with nothing appearing in Safari release notes. Re-test on OS
 updates, not browser updates. WKWebView is unconfirmed either way.
 
+Safari also falls back to HTTP/2 over TCP when QUIC cannot get through, behind the same
+API, which no other engine does. Streams keep working and datagrams disappear. Read
+`reliability` after connecting, or pass `requireUnreliable: true` to refuse the downgrade.
+
 The [compatibility page](https://echo.semantic-ui.com/compat) carries the same notes for
-Chrome and Firefox, plus a live read of whatever runtime you open it in.
+Chrome and Firefox, plus a live read of whatever runtime you open it in, and
+[references](https://echo.semantic-ui.com/references) lists the source behind each one.
 
 ## Certificates
 
@@ -88,12 +97,14 @@ rules are narrow:
   circulation and it fails with no diagnostic.
 - Total validity **at most 14 days**, the whole `notBefore` to `notAfter` span rather than the
   remaining time.
-- ECDSA P-256. RSA is excluded by the specification.
+- ECDSA P-256, the one curve every engine must accept. RSA is excluded by the
+  specification.
 - Incompatible with `allowPooling`; Safari throws `NotSupportedError` if both are set.
 - Certificate names are never checked on this path.
 
-Chrome does not consult the system trust store for QUIC, so mkcert and every similar
-dev-certificate tool produce something it will not accept. Pin instead.
+Chrome requires a *known* root rather than merely a trusted one, so mkcert and every
+private CA fail with `ERR_QUIC_CERT_ROOT_NOT_KNOWN`. Pin instead, or run Chrome with
+`--webtransport-developer-mode`.
 
 ## Running locally
 
