@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WebTransport interop exhibits — iOS Safari session establishment</title>
+<title>WebTransport echo — interop exhibits</title>
 <meta name="description" content="Free public WebTransport echo server and test client. Works with Safari/iOS (WT_MAX_SESSIONS + flow-control settings advertised), Chrome, and Firefox. Includes live interop exhibits for iOS Safari session-establishment findings.">
 <style>
   :root {
@@ -68,6 +68,19 @@
   th { color: var(--muted); font-weight: 600; }
   td.detail { white-space: normal; font-size: .92em; color: var(--muted); }
 
+  .tool { border: 1px solid var(--line); border-radius: .6em; padding: .9em; background: var(--panel); }
+  .tool label { display: block; font-size: .85em; color: var(--muted); margin: .55em 0 .15em; }
+  .tool input[type=text] { width: 100%; font: inherit; font-size: .92em; min-height: 44px;
+    padding: .45em .6em; border: 1px solid var(--line); border-radius: .45em;
+    background: var(--bg); color: var(--fg); font-family: ui-monospace, monospace; }
+  .tool .row { display: flex; gap: .6em; flex-wrap: wrap; align-items: center; margin-top: .7em; }
+  .tool .check { display: flex; align-items: center; gap: .4em; font-size: .9em; min-height: 44px; }
+  .tool .check input { width: 1.15em; height: 1.15em; }
+  #tool-state { font-size: .9em; font-family: ui-monospace, monospace; }
+  #tool-log { font: 13px/1.45 ui-monospace, monospace; white-space: pre-wrap;
+    word-break: break-all; background: var(--bg); border: 1px solid var(--line);
+    padding: .7em; border-radius: .45em; margin-top: .7em; max-height: 22em; overflow-y: auto; }
+
   details { margin-top: 2.2em; border-top: 1px solid var(--line); padding-top: .8em; }
   summary { cursor: pointer; font-weight: 600; min-height: 44px; padding: .5em 0; }
   #presets a { display: inline-block; margin: 0 .5em .5em 0; padding: .5em .8em;
@@ -86,7 +99,7 @@
   footer ul { margin: .4em 0; padding-left: 1.2em; }
 </style>
 
-<h1>WebTransport interop exhibits</h1>
+<h1>WebTransport echo — interop exhibits</h1>
 <p class="sub">iOS Safari session establishment</p>
 
 <p>This host runs several WebTransport echo servers that differ by exactly one
@@ -105,7 +118,9 @@ v0.11.0/v0.60.0 server that binds. The difference is therefore in wire behaviour
 that neither party advertises.</p>
 
 <p>Every server here presents a real Let's Encrypt certificate and uses no
-certificate pinning unless the case says otherwise.</p>
+certificate pinning unless the case says otherwise. The host doubles as a
+general-purpose echo endpoint, and the tool below connects to any WebTransport
+URL, not just these.</p>
 
 <p class="signature"><b>Refusal signature.</b> The client sees a
 <span class="mono">WebTransportError</span> with an <b>empty</b> message roughly
@@ -143,6 +158,33 @@ otherwise compete with findings 1 and 2 — certificate pinning, leaf shape, por
 number, the datagram <span class="mono">maxAge</span> setters, and quic-go
 itself.</p>
 <div id="controls-cases"></div>
+
+<h2>Echo tool</h2>
+<p>A general WebTransport client for any endpoint. It defaults to the
+validated-era rung here, which is the known-good target.</p>
+<div class="tool">
+  <label for="tool-url">endpoint</label>
+  <input id="tool-url" type="text" spellcheck="false" autocapitalize="off" autocorrect="off">
+  <div class="row">
+    <span class="check"><input id="tool-ru" type="checkbox" checked><label for="tool-ru" style="margin:0">requireUnreliable</label></span>
+  </div>
+  <label for="tool-hash">certificate hash (base64 sha-256, optional, pins a foreign target)</label>
+  <input id="tool-hash" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="empty means PKI validation">
+  <label for="tool-protos">protocols (optional, comma separated)</label>
+  <input id="tool-protos" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="empty omits the option">
+  <div class="row">
+    <button id="tool-connect" class="primary">Connect</button>
+    <button id="tool-disconnect" disabled>Disconnect</button>
+    <span id="tool-state" class="note">idle</span>
+  </div>
+  <label for="tool-message">message</label>
+  <input id="tool-message" type="text" value="hello" spellcheck="false">
+  <div class="row">
+    <button id="tool-datagram" disabled>Send datagram</button>
+    <button id="tool-stream" disabled>Stream echo</button>
+  </div>
+  <div id="tool-log"></div>
+</div>
 
 <details>
   <summary>Manual sweep</summary>
@@ -466,6 +508,155 @@ itself.</p>
   };
 
   renderCases();
+
+  // the echo tool. it holds a session open rather than measuring one attempt, so
+  // it drives the WebTransport API directly instead of going through runCase
+  const tool = {
+    url: document.getElementById('tool-url'),
+    ru: document.getElementById('tool-ru'),
+    hash: document.getElementById('tool-hash'),
+    protos: document.getElementById('tool-protos'),
+    connect: document.getElementById('tool-connect'),
+    disconnect: document.getElementById('tool-disconnect'),
+    state: document.getElementById('tool-state'),
+    message: document.getElementById('tool-message'),
+    datagram: document.getElementById('tool-datagram'),
+    stream: document.getElementById('tool-stream'),
+    log: document.getElementById('tool-log'),
+  };
+  tool.url.value = endpoint(4436);
+
+  let session = null;
+  let writer = null;
+  const pending = [];
+
+  const toolLine = (msg, cls) => {
+    const div = document.createElement('div');
+    if (cls) { div.className = cls; }
+    div.textContent = `${new Date().toTimeString().slice(0, 8)}  ${msg}`;
+    tool.log.append(div);
+    tool.log.scrollTop = tool.log.scrollHeight;
+  };
+
+  const setConnected = live => {
+    tool.connect.disabled = live;
+    tool.disconnect.disabled = !live;
+    tool.datagram.disabled = !live;
+    tool.stream.disabled = !live;
+    tool.url.disabled = live;
+  };
+
+  // datagram echoes arrive on one reader, so a send parks a resolver here and
+  // the reader hands the next payload back to whoever is waiting
+  const readDatagrams = async readable => {
+    const reader = readable.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) { return; }
+        const text = new TextDecoder().decode(value);
+        const waiting = pending.shift();
+        if (waiting) { waiting(text); }
+        else { toolLine(`datagram in "${text}"`); }
+      }
+    }
+    catch (error) { toolLine(`datagram reader stopped: ${describe(error)}`, 'bad'); }
+  };
+
+  tool.connect.onclick = async () => {
+    const target = tool.url.value.trim();
+    if (!target) { return; }
+    if (typeof WebTransport !== 'function') { toolLine('no WebTransport in this runtime', 'bad'); return; }
+    tool.state.textContent = 'constructing';
+    setConnected(true);
+    try {
+      const options = {};
+      if (tool.ru.checked) { options.requireUnreliable = true; }
+      const protocols = tool.protos.value.trim();
+      if (protocols) { options.protocols = protocols.split(',').map(p => p.trim()).filter(Boolean); }
+      const hash = tool.hash.value.trim();
+      if (hash) {
+        options.serverCertificateHashes = [{
+          algorithm: 'sha-256',
+          value: Uint8Array.from(atob(hash), c => c.charCodeAt(0)),
+        }];
+        toolLine(`pinning ${hash.slice(0, 12)}…`);
+      }
+      toolLine(`connecting ${target}`);
+      const wt = new WebTransport(target, options);
+      wt.closed.then(
+        info => { toolLine(`closed: ${JSON.stringify(info)}`); teardown(); },
+        error => { toolLine(`closed: ${describe(error)}`, 'bad'); teardown(); });
+      await wt.ready;
+      session = wt;
+      tool.state.textContent = `ready · reliability=${wt.reliability}`;
+      toolLine(`ready  reliability=${wt.reliability}  congestionControl=${wt.congestionControl}`, 'ok');
+      const { writable, readable } = datagramStreams(wt);
+      if (writable && readable) {
+        writer = writable.getWriter();
+        readDatagrams(readable);
+      }
+      else { toolLine('datagram API unavailable in this runtime; streams only'); }
+    }
+    catch (error) {
+      toolLine(`failed ${describe(error)}`, 'bad');
+      tool.state.textContent = 'failed';
+      teardown();
+    }
+  };
+
+  function teardown() {
+    session = null;
+    writer = null;
+    pending.length = 0;
+    setConnected(false);
+    if (tool.state.textContent.startsWith('ready')) { tool.state.textContent = 'closed'; }
+  }
+
+  tool.disconnect.onclick = () => {
+    if (!session) { return; }
+    toolLine('disconnecting');
+    try { session.close(); } catch (error) { /* already gone */ }
+    teardown();
+  };
+
+  tool.datagram.onclick = async () => {
+    if (!session || !writer) { toolLine('no datagram writer on this session', 'bad'); return; }
+    const text = tool.message.value;
+    const started = performance.now();
+    const echo = new Promise(resolve => pending.push(resolve));
+    await writer.write(new TextEncoder().encode(text));
+    toolLine(`datagram out "${text}"`);
+    const answer = await Promise.race([
+      echo,
+      new Promise(resolve => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (answer === null) { pending.pop(); toolLine('datagram echo timed out (3s)', 'bad'); return; }
+    toolLine(`datagram echo "${answer}" ${Math.round(performance.now() - started)}ms`, 'ok');
+  };
+
+  tool.stream.onclick = async () => {
+    if (!session) { return; }
+    const text = tool.message.value;
+    const started = performance.now();
+    try {
+      const stream = await session.createBidirectionalStream();
+      const streamWriter = stream.writable.getWriter();
+      await streamWriter.write(new TextEncoder().encode(text));
+      toolLine(`stream out "${text}"`);
+      const reader = stream.readable.getReader();
+      const answer = await Promise.race([
+        reader.read(),
+        new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 3000)),
+      ]);
+      if (answer.timeout) { toolLine('stream echo timed out (3s)', 'bad'); }
+      else {
+        toolLine(`stream echo "${new TextDecoder().decode(answer.value)}" ${Math.round(performance.now() - started)}ms`, 'ok');
+      }
+      try { await streamWriter.close(); } catch (error) { /* peer may have gone */ }
+    }
+    catch (error) { toolLine(`stream failed ${describe(error)}`, 'bad'); }
+  };
 
   // the manual sweep keeps the original query-param surface, driven by the same
   // engine so its results and the exhibit's cannot disagree
