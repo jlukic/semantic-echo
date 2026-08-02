@@ -19,6 +19,7 @@ another has named its requirement rather than merely failed.
 | | |
 |---|---|
 | Probe page | <https://echo.semantic-ui.com/> |
+| …the same page behind Basic auth | <https://echo.semantic-ui.com/auth/> (`retro` / `retro`) |
 | Control, webtransport-go v0.12.0 | `https://echo.semantic-ui.com:4433/echo` |
 | …the same server on the default port | `https://echo.semantic-ui.com/echo` (443/udp) |
 | webtransport-go v0.11.0 on quic-go v0.60.0 | `https://echo.semantic-ui.com:4436/echo` |
@@ -60,7 +61,16 @@ anticipated-stream counts, and one link per rung. `?url=` retargets it at any
 other server, which makes the page a portable client harness rather than a
 fixture for this host alone. `?hashport=N` pins the leaf that the listener on
 port N published, which is how the pinned taps get their hashes; without it a tap
-runs pure PKI validation.
+runs pure PKI validation. `?maxage=N` sets `incomingMaxAge` and `outgoingMaxAge`
+on the datagram stream straight after construction and before `ready`, which is
+where a client doing that in production does it.
+
+The same page is served at `/auth/` behind HTTP Basic auth (`retro` / `retro`),
+reproducing a Basic-auth browsing context. The `/hash` endpoints stay
+unauthenticated so the page's fetches still work from there, and those fetches
+are origin-absolute on purpose: a relative one inherits credentials from a
+`https://user:pass@host/auth/` URL, which browsers reject outright, and the
+resulting error reads as a WebTransport failure when it is nothing of the sort.
 
 Datagram plumbing is feature-detected. Safari exposes the streams as
 `createWritable()` / `createReadable()` factories rather than the `writable` and
