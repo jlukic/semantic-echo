@@ -225,6 +225,14 @@ async fn echo_session(request: SessionRequest) -> Result<(), Box<dyn Error>> {
 
     if let Some(why) = outcome {
         println!("rust session  closing id={:?} ({why})", connection.session_id());
+        // let whatever was already echoed reach the peer before the connection
+        // goes, so hitting a budget does not also discard paid-for bytes
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // wtransport 0.7.1 parses an incoming CLOSE_WEBTRANSPORT_SESSION capsule
+        // but exposes no way to send one, so this is a QUIC-level close. the
+        // reason travels in CONNECTION_CLOSE and browsers do not surface it,
+        // which is why the Go rungs report a readable reason here and this one
+        // only records it in the log
         connection.close(VarInt::from_u32(0), why.as_bytes());
     }
     Ok(())
