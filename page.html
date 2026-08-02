@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wt-lab probe</title>
+<style>
+  body { font: 18px/1.5 -apple-system, system-ui, sans-serif; margin: 1.2em; }
+  h1 { font-size: 1.2em; }
+  #presets a { display: inline-block; margin: 0 .6em .6em 0; padding: .45em .8em;
+    background: #eee; border-radius: .5em; text-decoration: none; color: #06c; }
+  #opts { color: #666; font-size: .85em; word-break: break-all; }
+  #log { font: 14px/1.45 ui-monospace, monospace; white-space: pre-wrap;
+    word-break: break-all; background: #f6f6f6; padding: .8em; border-radius: .5em; }
+  button { font-size: 1.1em; padding: .5em 1.4em; margin: .6em 0; }
+  .ok { color: #071; } .bad { color: #c11; }
+</style>
+<h1>wt-lab constructor sweep</h1>
+<div id="presets">
+  <a href="?">lane parity (ru=1, hash)</a>
+  <a href="?ru=0">no requireUnreliable</a>
+  <a href="?protos=sui-lane">protocols non-empty</a>
+  <a href="?nohash=1">no hashes (needs trusted cert)</a>
+  <a href="?uni=4&bidi=4">tight stream counts</a>
+</div>
+<div id="opts"></div>
+<button id="go">connect</button>
+<div id="log"></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const logEl = document.getElementById('log');
+  const t0 = performance.now();
+  const line = (msg, cls) => {
+    const ms = (performance.now() - t0).toFixed(1).padStart(8);
+    const div = document.createElement('div');
+    if (cls) { div.className = cls; }
+    div.textContent = `${ms}ms  ${msg}`;
+    logEl.appendChild(div);
+  };
+
+  const url = q.get('url') || `https://${location.hostname}:4433/echo`;
+  const options = {};
+  // ru absent in the query = lane parity (true); ru=0 omits it entirely so the
+  // platform default (fallback allowed) is what gets tested, not `false`
+  if (q.get('ru') !== '0') { options.requireUnreliable = true; }
+  if (q.get('pool') === '1') { options.allowPooling = true; }
+  if (q.get('protos')) { options.protocols = q.get('protos').split(','); }
+  if (q.get('uni')) { options.anticipatedConcurrentIncomingUnidirectionalStreams = +q.get('uni'); }
+  if (q.get('bidi')) { options.anticipatedConcurrentIncomingBidirectionalStreams = +q.get('bidi'); }
+
+  document.getElementById('go').onclick = async () => {
+    logEl.textContent = '';
+    if (typeof WebTransport !== 'function') { line('no WebTransport in this runtime', 'bad'); return; }
+    try {
+      const hash = await (await fetch('/hash')).text();
+      if (hash && q.get('nohash') !== '1') {
+        const bytes = Uint8Array.from(atob(hash), c => c.charCodeAt(0));
+        options.serverCertificateHashes = [{ algorithm: 'sha-256', value: bytes }];
+        line(`hash pinned ${hash.slice(0, 12)}…`);
+      }
+      else { line('no pinning — PKI validation'); }
+      line(`constructing ${url}`);
+      line(`options ${JSON.stringify(options, (k, v) => v instanceof Uint8Array ? '<bytes>' : v)}`);
+      const wt = new WebTransport(url, options);
+      wt.closed.then(
+        info => line(`closed: ${JSON.stringify(info)}`),
+        err => line(`closed rejected: ${err?.name}: "${err?.message}" source=${err?.source} code=${err?.streamErrorCode}`, 'bad'));
+      await wt.ready;
+      line(`READY  reliability=${wt.reliability}  congestionControl=${wt.congestionControl}`, 'ok');
+      const writer = wt.datagrams.writable.getWriter();
+      await writer.write(new TextEncoder().encode('ping'));
+      line('datagram sent');
+      const reader = wt.datagrams.readable.getReader();
+      const echo = await Promise.race([
+        reader.read(),
+        new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 3000)),
+      ]);
+      if (echo.timeout) { line('datagram echo TIMEOUT (3s)', 'bad'); }
+      else { line(`datagram echo "${new TextDecoder().decode(echo.value)}"`, 'ok'); }
+    }
+    catch (error) {
+      line(`FAILED ${error?.name}: "${error?.message}" source=${error?.source} code=${error?.streamErrorCode}`, 'bad');
+    }
+  };
+
+  document.getElementById('opts').textContent =
+    `target ${url} · params: ru=0 pool=1 protos=a,b uni=N bidi=N nohash=1 url=…`;
+</script>
