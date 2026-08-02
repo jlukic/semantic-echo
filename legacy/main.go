@@ -29,6 +29,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -123,36 +125,184 @@ func serveWT(bindHost string, port int, cert tls.Certificate, tag string) error 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s connect  origin=%q wt-available-protocols=%q", tag, r.Header.Get("Origin"), r.Header.Get("Wt-Available-Protocols"))
+		address := addressOf(r.RemoteAddr)
+		if ok, why := limits.acquire(address); !ok {
+			log.Printf("%s upgrade declined remote=%s (%s)", tag, r.RemoteAddr, why)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		session, err := server.Upgrade(w, r)
 		if err != nil {
+			limits.release(address)
 			log.Printf("%s upgrade REFUSED: %v", tag, err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		log.Printf("%s session  accepted remote=%s", tag, r.RemoteAddr)
-		ctx := context.Background()
-		go func() {
-			for {
-				data, err := session.ReceiveDatagram(ctx)
-				if err != nil {
-					return
-				}
-				session.SendDatagram(data)
-			}
-		}()
-		go func() {
-			for {
-				stream, err := session.AcceptStream(ctx)
-				if err != nil {
-					return
-				}
-				go io.Copy(stream, stream)
-			}
-		}()
+		serveEcho(session, address)
 	})
 	h3.Handler = mux
 
 	return server.ListenAndServe()
+}
+
+// egress is the only unbounded axis on a public echo, so a session carries a
+// byte budget and a deadline, one address may hold only a few at once, and the
+// process stops echoing entirely past a daily ceiling. sized far above honest
+// use: the heaviest exhibit moves well under 10 KiB
+const (
+	sessionEchoBudget  = 1 << 20
+	sessionLifetime    = 120 * time.Second
+	perAddressSessions = 4
+	dailyEgressCeiling = 2 << 30
+)
+
+type budgets struct {
+	mu       sync.Mutex
+	sessions map[string]int
+	echoed   int64
+	windowAt time.Time
+	warned   bool
+}
+
+var limits = &budgets{sessions: map[string]int{}, windowAt: time.Now()}
+
+// the window restarts 24h after it opened, which is all a bill guard needs
+func (b *budgets) roll() {
+	if time.Since(b.windowAt) >= 24*time.Hour {
+		b.echoed = 0
+		b.windowAt = time.Now()
+		b.warned = false
+	}
+}
+
+func (b *budgets) acquire(address string) (bool, string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.roll()
+	if b.echoed >= dailyEgressCeiling {
+		return false, "daily egress ceiling"
+	}
+	if b.sessions[address] >= perAddressSessions {
+		return false, "per-address session cap"
+	}
+	b.sessions[address]++
+	return true, ""
+}
+
+func (b *budgets) release(address string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sessions[address] <= 1 {
+		delete(b.sessions, address)
+		return
+	}
+	b.sessions[address]--
+}
+
+// spend reports whether the process may keep echoing once n more bytes are counted
+func (b *budgets) spend(n int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.roll()
+	b.echoed += int64(n)
+	if b.echoed < dailyEgressCeiling {
+		return true
+	}
+	if !b.warned {
+		b.warned = true
+		log.Printf("EGRESS CEILING: %d bytes echoed in 24h, refusing new sessions and halting echo", b.echoed)
+	}
+	return false
+}
+
+func addressOf(remote string) string {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return remote
+	}
+	return host
+}
+
+// io.Copy with a budget attached, so a public echo cannot become free bandwidth
+func echoStream(stream io.ReadWriter, spend func(int) bool) {
+	buffer := make([]byte, 32*1024)
+	for {
+		n, err := stream.Read(buffer)
+		if n > 0 {
+			if !spend(n) {
+				return
+			}
+			if _, err := stream.Write(buffer[:n]); err != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// the echo loops, bounded. both directions share one session budget, and
+// whichever limit bites first closes the session with a readable reason
+func serveEcho(session *webtransport.Session, address string) {
+	ctx, cancel := context.WithTimeout(context.Background(), sessionLifetime)
+	stopped := make(chan string, 1)
+	stop := func(why string) {
+		select {
+		case stopped <- why:
+		default:
+		}
+	}
+
+	var echoed atomic.Int64
+	spend := func(n int) bool {
+		if echoed.Add(int64(n)) > sessionEchoBudget {
+			stop("echo budget reached")
+			return false
+		}
+		if !limits.spend(n) {
+			stop("daily egress ceiling reached")
+			return false
+		}
+		return true
+	}
+
+	go func() {
+		defer limits.release(address)
+		defer cancel()
+		select {
+		case why := <-stopped:
+			session.CloseWithError(0, why)
+		case <-ctx.Done():
+			session.CloseWithError(0, "session lifetime reached")
+		case <-session.Context().Done():
+			// the peer left on its own, so free the slot immediately rather than
+			// holding it for the rest of the lifetime window
+		}
+	}()
+
+	go func() {
+		for {
+			data, err := session.ReceiveDatagram(ctx)
+			if err != nil {
+				return
+			}
+			if !spend(len(data)) {
+				return
+			}
+			session.SendDatagram(data)
+		}
+	}()
+	go func() {
+		for {
+			stream, err := session.AcceptStream(ctx)
+			if err != nil {
+				return
+			}
+			go echoStream(stream, spend)
+		}
+	}()
 }
 
 // a pinned rung's leaf: self-signed P-256 with serverAuth, explicitly not a CA,

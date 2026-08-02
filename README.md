@@ -79,6 +79,25 @@ are origin-absolute on purpose: a relative one inherits credentials from a
 `https://user:pass@host/auth/` URL, which browsers reject outright, and the
 resulting error reads as a WebTransport failure when it is nothing of the sort.
 
+## Abuse budgets
+
+The echo is public, so egress is capped. Every server enforces the same four
+numbers, and each is far above what any interop or development test needs — the
+heaviest exhibit here moves well under 10 KiB.
+
+- **1 MiB echoed per session**, datagrams and streams counted together. Past it
+  the session closes with the reason `echo budget reached`.
+- **120 seconds per session**, after which it closes with
+  `session lifetime reached`.
+- **4 concurrent sessions per address.** Further upgrades are declined, and a
+  slot frees the moment its session ends rather than at the end of the window.
+- **2 GiB echoed per process per day.** Past it the process refuses new sessions
+  and stops echoing on existing ones, and says so once in the log.
+
+The counters live in memory and reset when a process restarts. That is fine for
+their purpose, which is putting a floor under the worst-case bandwidth bill
+rather than resisting a determined attacker.
+
 Datagram plumbing is feature-detected. Safari exposes the streams as
 `createWritable()` / `createReadable()` factories rather than the `writable` and
 `readable` accessors the specification settled on, and a runtime with neither
