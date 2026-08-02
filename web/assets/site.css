@@ -470,9 +470,81 @@ button.action {
   margin-top: var(--margin-s);
   cursor: pointer;
 
-  input { margin-top: 0.3em; width: 1.05em; height: 1.05em; flex-shrink: 0; }
   a { color: var(--primary-text-color); }
+
+  /* the native control keeps its semantics and keyboard behaviour; only the
+     painting is ours, so the tick is the same Lucide mask the rest of the page
+     uses rather than a platform glyph in a platform colour */
+  input[type=checkbox] {
+    appearance: none;
+    -webkit-appearance: none;
+    display: grid;
+    place-content: center;
+    width: 1.15em;
+    height: 1.15em;
+    margin: 0.22em 0 0;
+    flex-shrink: 0;
+    border: var(--border);
+    border-radius: 0.3em;
+    background: var(--page-background);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+
+    &::before {
+      content: "";
+      width: 0.72em;
+      height: 0.72em;
+      background-color: var(--white);
+      mask-image: var(--icon-check);
+      mask-size: contain;
+      mask-repeat: no-repeat;
+      mask-position: center;
+      transform: scale(0);
+      transition: transform 0.12s ease-out;
+    }
+
+    &:checked {
+      background: var(--primary-color);
+      border-color: var(--primary-color);
+    }
+    &:checked::before { transform: scale(1); }
+
+    &:focus-visible { outline: none; box-shadow: var(--focused-ring-shadow); }
+    &:disabled { opacity: 0.45; cursor: default; }
+  }
+
+  &:hover input[type=checkbox]:not(:checked):not(:disabled) { border-color: var(--standard-40); }
 }
+
+/*******************************
+        Code examples
+*******************************/
+
+.snippets {
+  border: var(--border);
+  border-radius: var(--border-radius);
+  background-image: var(--very-subtle-gradient);
+  padding: var(--padding-s) var(--padding-l);
+  margin: var(--vertically-spaced);
+
+  summary {
+    cursor: pointer;
+    font-size: var(--text-s);
+    font-weight: var(--bold);
+    color: var(--muted-text-color);
+    padding: var(--padding-3xs) 0;
+
+    &:hover { color: var(--header-color); }
+  }
+
+  &[open] summary { margin-bottom: var(--margin-xs); }
+
+  .category { margin-top: var(--margin); }
+  .code-block { margin: var(--margin-3xs) 0 var(--margin-2xs); }
+  .hint { margin-top: 0; }
+}
+
+.budget { margin-top: var(--margin-s); }
 
 /*******************************
              Log

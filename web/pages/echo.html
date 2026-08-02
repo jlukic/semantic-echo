@@ -1,7 +1,17 @@
 {{define "content"}}
-<p class="intro">A public WebTransport echo. Point a client at it and your datagrams and
-streams come straight back.</p>
+<h2><span class="icon" style="mask-image: var(--icon-book)"></span>Overview</h2>
 
+<p class="intro">This site helps people working with the WebTransport standard understand
+the current lay of the land, and the practical issues that emerge while building on it. Use
+the echo below to test what your browser is capable of. For the subtleties involved, see
+the <a href="/compat">Compatibility</a> tab.</p>
+
+<h3>Example code</h3>
+
+<details class="snippets">
+<summary>Connecting to this echo from a browser, Node, Go or Rust</summary>
+
+<p class="category">Browser</p>
 <div class="code-block">
 <pre><span class="kw">const</span> wt = <span class="kw">new</span> <span class="fn">WebTransport</span>(<span class="st">'https://echo.semantic-ui.com/echo'</span>);
 <span class="kw">await</span> wt.ready;
@@ -12,10 +22,50 @@ streams come straight back.</p>
 <span class="kw">const</span> reader = wt.datagrams.readable.<span class="fn">getReader</span>();
 <span class="kw">const</span> { value } = <span class="kw">await</span> reader.<span class="fn">read</span>();  <span class="cm">// "hello"</span></pre>
 </div>
-
 <p class="hint">On Safari those two streams are <code>createWritable()</code> and
-<code>createReadable()</code> factories instead. <a href="/compat">Other differences worth
-knowing</a>.</p>
+<code>createReadable()</code> factories rather than accessors. Feature-detect both shapes.</p>
+
+<p class="category">Node</p>
+<div class="code-block">
+<pre><span class="kw">import</span> { WebTransport } <span class="kw">from</span> <span class="st">'@fails-components/webtransport'</span>;
+
+<span class="kw">const</span> wt = <span class="kw">new</span> <span class="fn">WebTransport</span>(<span class="st">'https://echo.semantic-ui.com/echo'</span>);
+<span class="kw">await</span> wt.ready;
+
+<span class="kw">const</span> writer = wt.datagrams.writable.<span class="fn">getWriter</span>();
+<span class="kw">await</span> writer.<span class="fn">write</span>(<span class="kw">new</span> <span class="fn">TextEncoder</span>().<span class="fn">encode</span>(<span class="st">'hello'</span>));</pre>
+</div>
+<p class="hint">Nothing in Node terminates or dials WebTransport without a native addon.
+This package is the one with production use behind it.</p>
+
+<p class="category">Go</p>
+<div class="code-block">
+<pre><span class="kw">var</span> transport webtransport.Transport
+
+_, session, err := transport.<span class="fn">Dial</span>(context.<span class="fn">Background</span>(), <span class="st">"https://echo.semantic-ui.com/echo"</span>, <span class="kw">nil</span>)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    log.<span class="fn">Fatal</span>(err)
+}
+
+session.<span class="fn">SendDatagram</span>([]<span class="kw">byte</span>(<span class="st">"hello"</span>))
+echo, _ := session.<span class="fn">ReceiveDatagram</span>(context.<span class="fn">Background</span>())
+fmt.<span class="fn">Println</span>(<span class="kw">string</span>(echo)) <span class="cm">// hello</span></pre>
+</div>
+<p class="hint">The Go client requires the peer to negotiate RESET_STREAM_AT, which no
+browser does. It reaches the Go endpoints here but not <code>:4438</code>.</p>
+
+<p class="category">Rust</p>
+<div class="code-block">
+<pre><span class="kw">let</span> config = ClientConfig::<span class="fn">default</span>();
+
+<span class="kw">let</span> connection = Endpoint::<span class="fn">client</span>(config)?
+    .<span class="fn">connect</span>(<span class="st">"https://echo.semantic-ui.com/echo"</span>)
+    .<span class="kw">await</span>?;
+
+connection.<span class="fn">send_datagram</span>(<span class="st">b"hello"</span>)?;
+<span class="kw">let</span> echo = connection.<span class="fn">receive_datagram</span>().<span class="kw">await</span>?;</pre>
+</div>
+</details>
 
 <h2><span class="icon" style="mask-image: var(--icon-plug)"></span>Connect</h2>
 
@@ -26,7 +76,7 @@ knowing</a>.</p>
   <label class="switch" for="safari">
     <input id="safari" type="checkbox">
     <span>Use the endpoint Safari accepts. Safari and iOS refuse standard WebTransport
-    handshakes. <a href="/compat">Why</a></span>
+    handshakes. <a href="/compat#safari">Why</a></span>
   </label>
 
   <div class="row">
@@ -51,23 +101,27 @@ knowing</a>.</p>
   </details>
 
   <div id="log" class="log"></div>
+
+  <p class="hint budget">Echo is budgeted: 1 MiB and 120 seconds per session, four sessions
+  per address. Far above any interop or development test.</p>
 </div>
 
-<h2><span class="icon" style="mask-image: var(--icon-terminal)"></span>What the server saw</h2>
+<h2><span class="icon" style="mask-image: var(--icon-terminal)"></span>Server Diagnostics</h2>
 
-<p>A failed WebTransport handshake reaches your code as one
-<code>WebTransportError</code> with an empty message. That is the whole diagnostic the
-browser offers, on every engine, for every cause. The server on the other end saw
-considerably more.</p>
+<p>The most common frustration when building with WebTransport is that the client gives you
+nowhere near enough information to determine why a handshake failed. Below is what this
+server recorded for your attempt above, which carries considerably more than the browser
+will ever hand you.</p>
 
 <div id="observation">
   <div class="verdict">Connect above, then this fills in with what arrived here from your address.</div>
 </div>
 
-<h2><span class="icon" style="mask-image: var(--icon-network)"></span>Endpoints</h2>
+<h2><span class="icon" style="mask-image: var(--icon-network)"></span>Additional Diagnostic Endpoints</h2>
 
-<p>Every endpoint runs the same echo handler behind the same certificate. They differ in
-what they advertise during the handshake, which is the part clients disagree about.</p>
+<p>These test slight variations in the handshake, which can produce different results
+depending on the browser. Use them to find which part your own disagrees with. All of them
+run the same echo handler behind the same certificate.</p>
 
 <div class="board" id="board"></div>
 
@@ -75,9 +129,6 @@ what they advertise during the handshake, which is the part clients disagree abo
   <button id="run-all" class="action">Test all four</button>
   <span id="run-all-state" class="hint"></span>
 </p>
-
-<p class="hint">Echo is budgeted: 1 MiB and 120 seconds per session, four sessions per
-address. Far above any interop or development test.</p>
 {{end}}
 
 {{define "script"}}
