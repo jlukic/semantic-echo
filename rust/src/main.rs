@@ -183,10 +183,14 @@ async fn echo_session(request: SessionRequest) -> Result<(), Box<dyn Error>> {
     let echoed = Arc::new(AtomicU64::new(0));
     let deadline = tokio::time::sleep(SESSION_LIFETIME);
     tokio::pin!(deadline);
+    // stream echoes run on their own tasks, so they report a spent budget back
+    // here rather than quietly stopping and leaving the session idle
+    let (stop, mut stopped) = tokio::sync::mpsc::channel::<&'static str>(1);
 
     let outcome: Option<&str> = loop {
         tokio::select! {
             _ = &mut deadline => break Some("session lifetime reached"),
+            Some(why) = stopped.recv() => break Some(why),
             stream = connection.accept_bi() => {
                 let (mut send, mut recv) = match stream {
                     Ok(stream) => stream,
@@ -195,8 +199,11 @@ async fn echo_session(request: SessionRequest) -> Result<(), Box<dyn Error>> {
                 // per-stream task: a peer that opens a stream and stalls must
                 // not hold up datagrams or the next stream on the session
                 let echoed = Arc::clone(&echoed);
+                let stop = stop.clone();
                 tokio::spawn(async move {
-                    echo_stream(&mut recv, &mut send, &echoed).await;
+                    if let Err(why) = echo_stream(&mut recv, &mut send, &echoed).await {
+                        let _ = stop.try_send(why);
+                    }
                     let _ = send.finish().await;
                 });
             }
@@ -223,18 +230,21 @@ async fn echo_session(request: SessionRequest) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn echo_stream(recv: &mut RecvStream, send: &mut SendStream, echoed: &AtomicU64) {
+// Ok means the stream ended on its own; Err names the budget that stopped it
+async fn echo_stream(
+    recv: &mut RecvStream,
+    send: &mut SendStream,
+    echoed: &AtomicU64,
+) -> Result<(), &'static str> {
     let mut buffer = vec![0u8; 32 * 1024];
     loop {
         let read = match recv.read(&mut buffer).await {
             Ok(Some(read)) if read > 0 => read,
-            _ => return,
+            _ => return Ok(()),
         };
-        if charge(echoed, read as u64).is_err() {
-            return;
-        }
+        charge(echoed, read as u64)?;
         if send.write_all(&buffer[..read]).await.is_err() {
-            return;
+            return Ok(());
         }
     }
 }
