@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"html/template"
+	"io/fs"
 	"net/http"
 )
 
@@ -14,6 +17,30 @@ type page struct {
 	Description string
 	Nav         string
 	Updated     string
+	Version     string
+}
+
+// A correction to a claim is worthless if a returning reader keeps the previous
+// script for an hour. Asset URLs carry a version derived from the asset bytes,
+// so a deploy that changes them changes the URL and is picked up at once, while
+// a deploy that does not leaves the cache intact.
+var assetVersion = hashAssets()
+
+func hashAssets() string {
+	sum := sha256.New()
+	fs.WalkDir(assetsFS, "web/assets", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, err := assetsFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sum.Write([]byte(path))
+		sum.Write(data)
+		return nil
+	})
+	return base64.RawURLEncoding.EncodeToString(sum.Sum(nil))[:10]
 }
 
 // every route this host serves as HTML. the exhibits are deliberately absent
@@ -61,6 +88,7 @@ func renderPage(w http.ResponseWriter, route string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	data := pageSpecs[route].page
 	data.Updated = contentUpdated
+	data.Version = assetVersion
 	if err := templates[route].ExecuteTemplate(w, "layout", data); err != nil {
 		// the response is already partly written by the time a template can
 		// fail, so there is nothing useful to say to the client

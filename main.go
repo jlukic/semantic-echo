@@ -461,7 +461,18 @@ func main() {
 			}
 
 			if strings.HasPrefix(r.URL.Path, "/assets/") {
-				w.Header().Set("Cache-Control", "public, max-age=3600")
+				// a versioned URL names one immutable body, so it can be held
+				// forever. font files are named per face and are referenced from
+				// inside a stylesheet that cannot carry the version, so they are
+				// held on the same terms: a different face would be a different
+				// file. anything else might be anything, and is held briefly
+				immutable := r.URL.Query().Get("v") != "" ||
+					strings.HasSuffix(r.URL.Path, ".woff2")
+				if immutable {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "public, max-age=300")
+				}
 				assets.ServeHTTP(w, r)
 				return
 			}
