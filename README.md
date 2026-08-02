@@ -60,10 +60,16 @@ Port 443 maps to the app's 4434 as raw TCP, so the page needs no port in its
 URL while the app still owns the TLS handshake.
 
 The machine auto-stops when idle. Any TCP request to port 443 wakes it, so
-loading the page before tapping is the normal entry path.
+loading the page before tapping is the normal entry path — a UDP packet alone
+will not start a stopped machine.
+
+Keep this app at exactly one machine. Fly routes UDP per packet, so a second
+instance can split a single QUIC connection across two servers and produce
+handshake failures that look exactly like the client bugs this host exists to
+diagnose. `flyctl deploy` adds an HA second machine by default:
 
 ```sh
-flyctl deploy
+flyctl deploy && flyctl scale count 1
 ```
 
 The chain reaches the machine as secrets, which the container writes to disk at
