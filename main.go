@@ -30,6 +30,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -146,6 +148,7 @@ func main() {
 	certFile := flag.String("cert", "", "fullchain PEM path (le mode)")
 	keyFile := flag.String("key", "", "private key PEM path (le mode)")
 	bindHost := flag.String("bind", "", "UDP bind host (fly-global-services on Fly; empty = all interfaces)")
+	hashDir := flag.String("hashdir", "/tmp", "directory sibling listeners publish their leaf hashes into")
 	flag.Parse()
 
 	if err := os.MkdirAll(*qlogDir, 0o755); err != nil {
@@ -250,6 +253,17 @@ func main() {
 				w.Header().Set("Content-Type", "text/plain")
 				fmt.Fprint(w, hash)
 			default:
+				// /hash<port> hands back the leaf hash a sibling listener published
+				// to disk, so the page can pin a rung this process does not serve
+				if suffix, ok := strings.CutPrefix(r.URL.Path, "/hash"); ok {
+					if p, err := strconv.ParseUint(suffix, 10, 16); err == nil {
+						// rebuilt from the parsed number, never from the raw path
+						published, _ := os.ReadFile(fmt.Sprintf("%s/hash%d", *hashDir, p))
+						w.Header().Set("Content-Type", "text/plain")
+						w.Write(published)
+						return
+					}
+				}
 				w.Header().Set("Content-Type", "text/html")
 				w.Write(pageHTML)
 			}

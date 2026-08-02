@@ -23,6 +23,7 @@
   <a href="?url=https://echo.semantic-ui.com/echo">WT on :443</a>
   <a href="?url=https://echo.semantic-ui.com:4436/echo">v0.11 validated era</a>
   <a href="?url=https://echo.semantic-ui.com:4438/echo">rust wtransport</a>
+  <a href="?url=https://echo.semantic-ui.com:4437/echo&hashport=4437">pinned (A/B vs :4436)</a>
 </div>
 <div id="opts"></div>
 <button id="go">connect</button>
@@ -53,7 +54,10 @@
     logEl.textContent = '';
     if (typeof WebTransport !== 'function') { line('no WebTransport in this runtime', 'bad'); return; }
     try {
-      const hash = await (await fetch('/hash')).text();
+      // hashport=N pins against the leaf a sibling rung published under /hashN.
+      // the default /hash is empty in production, so plain taps run pure PKI
+      const hashPort = q.get('hashport');
+      const hash = await (await fetch(hashPort ? `/hash${hashPort}` : '/hash')).text();
       if (hash && q.get('nohash') !== '1') {
         const bytes = Uint8Array.from(atob(hash), c => c.charCodeAt(0));
         options.serverCertificateHashes = [{ algorithm: 'sha-256', value: bytes }];
@@ -68,10 +72,18 @@
         err => line(`closed rejected: ${err?.name}: "${err?.message}" source=${err?.source} code=${err?.streamErrorCode}`, 'bad'));
       await wt.ready;
       line(`READY  reliability=${wt.reliability}  congestionControl=${wt.congestionControl}`, 'ok');
-      const writer = wt.datagrams.writable.getWriter();
+      // Safari exposes the datagram streams as createWritable()/createReadable()
+      // factories rather than the accessors the spec settled on. the session is
+      // already established either way, so a missing API is a note, not a failure
+      const datagrams = wt.datagrams || {};
+      const factory = name => typeof datagrams[name] === 'function' ? datagrams[name]() : null;
+      const writable = datagrams.writable || factory('createWritable');
+      const readable = datagrams.readable || factory('createReadable');
+      if (!writable || !readable) { line('datagram API unavailable in this runtime'); return; }
+      const writer = writable.getWriter();
       await writer.write(new TextEncoder().encode('ping'));
       line('datagram sent');
-      const reader = wt.datagrams.readable.getReader();
+      const reader = readable.getReader();
       const echo = await Promise.race([
         reader.read(),
         new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 3000)),
@@ -85,5 +97,5 @@
   };
 
   document.getElementById('opts').textContent =
-    `target ${url} · params: ru=0 pool=1 protos=a,b uni=N bidi=N nohash=1 url=…`;
+    `target ${url} · params: ru=0 pool=1 protos=a,b uni=N bidi=N nohash=1 hashport=N url=…`;
 </script>
