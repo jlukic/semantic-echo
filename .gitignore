@@ -1,5 +1,9 @@
 wt-lab
+wt-legacy
+wt-rust
+rust/target/
 qlog/
+qlog-legacy/
 *.sqlog
 ca.key
 ca.pem

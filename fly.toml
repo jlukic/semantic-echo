@@ -5,8 +5,8 @@ primary_region = 'iad'
 
 # UDP external and internal ports must match: Fly's proxy forwards UDP without
 # rewriting the destination port, so a mismatch silently black-holes the
-# handshake. The app binds fly-global-services (see the Dockerfile CMD), which
-# is the only interface Fly delivers public UDP on.
+# handshake. Every rung binds fly-global-services (see start.sh), which is the
+# only interface Fly delivers public UDP on.
 [[services]]
   protocol = 'udp'
   internal_port = 4433
@@ -27,6 +27,28 @@ primary_region = 'iad'
 
   [[services.ports]]
     port = 443
+
+# rung A: webtransport-go v0.11.0 on quic-go v0.60.0
+[[services]]
+  protocol = 'udp'
+  internal_port = 4436
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 4436
+
+# rung B: rust wtransport over quinn
+[[services]]
+  protocol = 'udp'
+  internal_port = 4438
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 4438
 
 # the probe page, on plain https with no port in the URL. raw TCP passthrough
 # with no handlers on purpose: the app terminates TLS itself with the Let's

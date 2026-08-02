@@ -4,31 +4,43 @@ A standing WebTransport interop smoke. It answers one question: does a given
 browser build establish a WebTransport session against a stock server over a
 real WebPKI certificate, with no certificate pinning anywhere in the path?
 
-Everything here is deliberately vanilla. The server is
+Everything here is deliberately vanilla. The control server is
 [webtransport-go](https://github.com/quic-go/webtransport-go) v0.12.0 with no
 `Config`, no `AdditionalSettings`, and no vendored patches — whatever SETTINGS
 the library's defaults produce is the wire under test. When a client fails
 against this, the client is the variable.
+
+Alongside it run two more servers on their own ports. All three share one
+certificate and one echo shape, so a client that binds against one and refuses
+another has narrowed the requirement to whatever differs between them.
 
 ## Taps
 
 | | |
 |---|---|
 | Probe page | <https://echo.semantic-ui.com/> |
-| WebTransport endpoint | `https://echo.semantic-ui.com:4433/echo` |
-| …also on the default port | `https://echo.semantic-ui.com/echo` (443/udp) |
-| Certificate | Let's Encrypt, served on both ports, no `serverCertificateHashes` |
+| Control, webtransport-go v0.12.0 | `https://echo.semantic-ui.com:4433/echo` |
+| …the same server on the default port | `https://echo.semantic-ui.com/echo` (443/udp) |
+| webtransport-go v0.11.0 on quic-go v0.60.0 | `https://echo.semantic-ui.com:4436/echo` |
+| rust `wtransport` over quinn | `https://echo.semantic-ui.com:4438/echo` |
+| Certificate | Let's Encrypt, served on every port, no `serverCertificateHashes` |
+
+Pinning the older library pins its whole wire image, QUIC transport parameters
+as well as h3 SETTINGS, which reproducing the SETTINGS alone on a newer core
+cannot do. The Rust rung shares no code with either Go server, so it separates
+"this client dislikes quic-go" from "this client dislikes WebTransport".
 
 The page sweeps `WebTransport` constructor options via query params, one preset
 per link, and logs every stage with millisecond stamps. Presets cover
-`requireUnreliable` on and off, a non-empty `protocols` list, and tight
-anticipated-stream counts. `?url=` retargets it at another server, which makes
-the page a portable client harness rather than a fixture for this host alone.
+`requireUnreliable` on and off, a non-empty `protocols` list, tight
+anticipated-stream counts, and one link per rung. `?url=` retargets it at any
+other server, which makes the page a portable client harness rather than a
+fixture for this host alone.
 
-The endpoint echoes datagrams and bidirectional streams straight back, and
-answers identically on 4433/udp and 443/udp — a client that dials only the
-default port still finds it. Each connection writes a qlog to `/tmp/qlog` on
-the machine.
+Every endpoint echoes datagrams and bidirectional streams straight back. The Go
+servers write a qlog per connection under `/tmp/qlog` and `/tmp/qlog-legacy`;
+all three log session requests to stdout, so `flyctl logs` separates them by
+their `legacy` and `rust` prefixes.
 
 ## Running locally
 
@@ -48,6 +60,17 @@ Serves the page on `https://localhost:4434/` and WebTransport on
 
 Useful flags: `-port`, `-pageport`, `-san`, `-qlog`, and `-bind` (set to
 `fly-global-services` on Fly, which is the only interface public UDP arrives on).
+
+The other two rungs both want a real chain on disk and take no self-signed path,
+so point them at any PEM pair:
+
+```sh
+cd legacy && go build -o wt-legacy . && ./wt-legacy -cert fullchain.pem -key privkey.pem
+cd rust   && cargo build --release && ./target/release/wt-rust "" 4438
+```
+
+`wt-rust` takes its bind host and port as positional arguments; an empty host
+means all interfaces, and it reads `/cert.pem` and `/key.pem`.
 
 ## Deployment
 
@@ -72,8 +95,8 @@ diagnose. `flyctl deploy` adds an HA second machine by default:
 flyctl deploy && flyctl scale count 1
 ```
 
-The chain reaches the machine as secrets, which the container writes to disk at
-boot:
+The chain reaches the machine as secrets, which `start.sh` writes to disk before
+launching all three servers:
 
 ```sh
 flyctl secrets set -a semanticui-echo \

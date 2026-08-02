@@ -1,0 +1,14 @@
+[package]
+name = "wt-rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# ring over aws-lc-rs: no cmake/clang in the build stage. self-signed is off
+# because the chain always arrives as PEM files from the Fly secrets
+wtransport = { version = "0.7.1", default-features = false, features = ["ring"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "io-util"] }
+
+[profile.release]
+opt-level = "s"
+strip = true
