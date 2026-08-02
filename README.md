@@ -22,6 +22,7 @@ another has named its requirement rather than merely failed.
 | …the same page behind Basic auth | <https://echo.semantic-ui.com/auth/> (`retro` / `retro`) |
 | Control, webtransport-go v0.12.0 | `https://echo.semantic-ui.com:4433/echo` |
 | …the same server on the default port | `https://echo.semantic-ui.com/echo` (443/udp) |
+| …the same server, configured to send the trio | `https://echo.semantic-ui.com:4440/echo` |
 | webtransport-go v0.11.0 on quic-go v0.60.0 | `https://echo.semantic-ui.com:4436/echo` |
 | …the same server, self-signed leaf, pinned | `https://echo.semantic-ui.com:4437/echo` |
 | …and again with `CertSign` on that leaf | `https://echo.semantic-ui.com:4439/echo` |
@@ -34,6 +35,12 @@ as well as h3 SETTINGS, which reproducing the SETTINGS alone on a newer core
 cannot do. Notably v0.11.0 sends the `WT_INITIAL_MAX_DATA` /
 `WT_INITIAL_MAX_STREAMS_UNI` / `WT_INITIAL_MAX_STREAMS_BIDI` trio that v0.12.0
 omits, which draft-13 makes mandatory whenever `WT_MAX_SESSIONS` exceeds 1.
+
+Port 4440 closes that comparison from the other side: it is the v0.12.0 server
+given a `webtransport.Config` that sends the trio at the same `1<<60` values
+v0.11.0 hardcodes. Its nine settings come out byte-identical to 4436's, so
+between those two ports the library version is the only variable, and against
+4433 it differs by exactly the three trio lines.
 
 The Rust rung shares no code with either Go server, so it separates "this client
 dislikes quic-go" from "this client dislikes WebTransport".
