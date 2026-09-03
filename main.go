@@ -25,7 +25,6 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"math/big"
@@ -154,8 +153,13 @@ func addressOf(remote string) string {
 	return normalizeAddress(host)
 }
 
-// io.Copy with a budget attached, so a public echo cannot become free bandwidth
-func echoStream(stream io.ReadWriter, spend func(int) bool) {
+
+// a stream is retired, and its slot in the peer's stream credit returned, only
+// once both directions have finished. echoing to the peer's FIN and walking away
+// left the send side open, which pinned every connection at quic-go's hundred
+// incoming streams: the hundred-and-first open failed on Chrome
+func echoStream(stream *webtransport.Stream, spend func(int) bool) {
+	defer stream.Close()
 	buffer := make([]byte, 32*1024)
 	for {
 		n, err := stream.Read(buffer)
