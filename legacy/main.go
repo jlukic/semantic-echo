@@ -43,6 +43,7 @@ func main() {
 	port := flag.Int("port", 4436, "WebTransport UDP port serving the real chain")
 	pinnedPort := flag.Int("pinnedport", 4437, "WebTransport UDP port serving the self-signed, hash-pinned leaf")
 	certSignPort := flag.Int("certsignport", 4439, "WebTransport UDP port serving a pinned leaf that also carries CertSign")
+	probePort := flag.Int("probeport", 4441, "WebTransport UDP port for the flow-control probe (a 64 MiB session budget, one session per address)")
 	altPort := flag.Int("altport", 6443, "WebTransport UDP port serving the same pinned leaf, so the port number is the only variable")
 	certFile := flag.String("cert", "/cert.pem", "fullchain PEM path")
 	keyFile := flag.String("key", "/key.pem", "private key PEM path")
@@ -82,8 +83,8 @@ func main() {
 	// but the port number separates the two
 	publish(*altPort, pinnedHash)
 
-	log.Printf("wt-legacy boot wt=:%d pinned=:%d certsign=:%d alt=:%d qlog=%s webtransport-go=v0.11.0 quic-go=v0.60.0",
-		*port, *pinnedPort, *certSignPort, *altPort, *qlogDir)
+	log.Printf("wt-legacy boot wt=:%d pinned=:%d certsign=:%d alt=:%d probe=:%d qlog=%s webtransport-go=v0.11.0 quic-go=v0.60.0",
+		*port, *pinnedPort, *certSignPort, *altPort, *probePort, *qlogDir)
 	// int() is load-bearing: x509.KeyUsage is a Stringer, so %x on the bare
 	// value hex-encodes its name instead of the bit field
 	log.Printf("pinned   certHash=%s keyUsage=0x%02x isCA=false sans=%v", pinnedHash, int(x509.KeyUsageDigitalSignature), hosts)
@@ -92,15 +93,21 @@ func main() {
 
 	// either listener dying takes the process with it, so a half-served machine
 	// restarts instead of quietly answering on some ports
-	errs := make(chan error, 4)
-	go func() { errs <- serveWT(*bindHost, *port, chain, "legacy") }()
-	go func() { errs <- serveWT(*bindHost, *pinnedPort, pinned, "pinned") }()
-	go func() { errs <- serveWT(*bindHost, *certSignPort, certSign, "certsign") }()
-	go func() { errs <- serveWT(*bindHost, *altPort, pinned, "altport") }()
+	errs := make(chan error, 5)
+	go func() { errs <- serveWT(*bindHost, *port, chain, "legacy", false) }()
+	go func() { errs <- serveWT(*bindHost, *pinnedPort, pinned, "pinned", false) }()
+	go func() { errs <- serveWT(*bindHost, *certSignPort, certSign, "certsign", false) }()
+	go func() { errs <- serveWT(*bindHost, *altPort, pinned, "altport", false) }()
+	// the flow-control probe: the same echo on the real chain, with a budget past WebKit 319818's lines
+	go func() { errs <- serveWT(*bindHost, *probePort, chain, "probe", true) }()
 	log.Fatal(<-errs)
 }
 
-func serveWT(bindHost string, port int, cert tls.Certificate, tag string) error {
+func serveWT(bindHost string, port int, cert tls.Certificate, tag string, probe bool) error {
+	budget, lifetime := int64(sessionEchoBudget), sessionLifetime
+	if probe {
+		budget, lifetime = probeEchoBudget, probeLifetime
+	}
 	tlsConf := &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h3"}}
 	tlsConf.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 		log.Printf("%s hello    sni=%q alpn=%v ciphers=%d curves=%v", tag, hello.ServerName, hello.SupportedProtos, len(hello.CipherSuites), hello.SupportedCurves)
@@ -141,7 +148,7 @@ func serveWT(bindHost string, port int, cert tls.Certificate, tag string) error 
 		log.Printf("%s connect  origin=%q wt-available-protocols=%q", tag, r.Header.Get("Origin"), r.Header.Get("Wt-Available-Protocols"))
 		address := addressOf(r.RemoteAddr)
 		watch.record(address, port, kindConnect, "origin="+r.Header.Get("Origin"))
-		if ok, why := limits.acquire(address); !ok {
+		if ok, why := limits.acquire(address, probe); !ok {
 			log.Printf("%s upgrade declined remote=%s (%s)", tag, r.RemoteAddr, why)
 			watch.record(address, port, kindDeclined, why)
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -157,7 +164,7 @@ func serveWT(bindHost string, port int, cert tls.Certificate, tag string) error 
 		}
 		log.Printf("%s session  accepted remote=%s", tag, r.RemoteAddr)
 		watch.record(address, port, kindSession, "")
-		serveEcho(session, address)
+		serveEcho(session, address, budget, lifetime)
 	})
 	h3.Handler = mux
 
@@ -173,6 +180,17 @@ const (
 	sessionLifetime    = 120 * time.Second
 	perAddressSessions = 4
 	dailyEgressCeiling = 2 << 30
+)
+
+// the flow-control probe's budget. WebKit 319818 deadlocks a connection near 16 MiB of
+// cumulative stream data or 7,600 streams because credit is never returned on FIN, so a
+// probe that can reach the line needs a session budget past it and time to get there.
+// sized to cross both lines once with margin, on one port, one session per address. it
+// lives on this rung because this is the library pin Safari accepts
+const (
+	probeEchoBudget = 64 << 20
+	probeLifetime   = 10 * time.Minute
+	probeSessions   = 1
 )
 
 type budgets struct {
@@ -194,14 +212,18 @@ func (b *budgets) roll() {
 	}
 }
 
-func (b *budgets) acquire(address string) (bool, string) {
+func (b *budgets) acquire(address string, probe bool) (bool, string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.roll()
 	if b.echoed >= dailyEgressCeiling {
 		return false, "daily egress ceiling"
 	}
-	if b.sessions[address] >= perAddressSessions {
+	cap := perAddressSessions
+	if probe {
+		cap = probeSessions
+	}
+	if b.sessions[address] >= cap {
 		return false, "per-address session cap"
 	}
 	b.sessions[address]++
@@ -242,8 +264,12 @@ func addressOf(remote string) string {
 	return normalizeAddress(host)
 }
 
-// io.Copy with a budget attached, so a public echo cannot become free bandwidth
-func echoStream(stream io.ReadWriter, spend func(int) bool) {
+// io.Copy with a budget attached, so a public echo cannot become free bandwidth.
+// the send side closes when the peer's does: a stream is retired, and its slot in
+// the peer's stream credit returned, only once both directions have finished, and
+// leaving it open pinned every connection at quic-go's hundred incoming streams
+func echoStream(stream *webtransport.Stream, spend func(int) bool) {
+	defer stream.Close()
 	buffer := make([]byte, 32*1024)
 	for {
 		n, err := stream.Read(buffer)
@@ -263,8 +289,8 @@ func echoStream(stream io.ReadWriter, spend func(int) bool) {
 
 // the echo loops, bounded. both directions share one session budget, and
 // whichever limit bites first closes the session with a readable reason
-func serveEcho(session *webtransport.Session, address string) {
-	ctx, cancel := context.WithTimeout(context.Background(), sessionLifetime)
+func serveEcho(session *webtransport.Session, address string, budget int64, lifetime time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), lifetime)
 	stopped := make(chan string, 1)
 	stop := func(why string) {
 		select {
@@ -275,7 +301,7 @@ func serveEcho(session *webtransport.Session, address string) {
 
 	var echoed atomic.Int64
 	spend := func(n int) bool {
-		if echoed.Add(int64(n)) > sessionEchoBudget {
+		if echoed.Add(int64(n)) > budget {
 			stop("echo budget reached")
 			return false
 		}

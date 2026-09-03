@@ -72,16 +72,6 @@ const (
 	dailyEgressCeiling = 2 << 30
 )
 
-// the flow-control probe's budget. WebKit 319818 deadlocks a connection near 16 MiB of
-// cumulative stream data or 7,600 streams because credit is never returned on FIN, so a
-// probe that can reach the line needs a session budget past it and time to get there.
-// sized to cross both lines once with margin, on one port, one session per address
-const (
-	probeEchoBudget = 64 << 20
-	probeLifetime   = 10 * time.Minute
-	probeSessions   = 1
-)
-
 type budgets struct {
 	mu       sync.Mutex
 	sessions map[string]int
@@ -101,18 +91,14 @@ func (b *budgets) roll() {
 	}
 }
 
-func (b *budgets) acquire(address string, probe bool) (bool, string) {
+func (b *budgets) acquire(address string) (bool, string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.roll()
 	if b.echoed >= dailyEgressCeiling {
 		return false, "daily egress ceiling"
 	}
-	cap := perAddressSessions
-	if probe {
-		cap = probeSessions
-	}
-	if b.sessions[address] >= cap {
+	if b.sessions[address] >= perAddressSessions {
 		return false, "per-address session cap"
 	}
 	b.sessions[address]++
@@ -179,8 +165,8 @@ func echoStream(stream *webtransport.Stream, spend func(int) bool) {
 
 // the echo loops, bounded. both directions share one session budget, and
 // whichever limit bites first closes the session with a readable reason
-func serveEcho(session *webtransport.Session, address string, budget int64, lifetime time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), lifetime)
+func serveEcho(session *webtransport.Session, address string) {
+	ctx, cancel := context.WithTimeout(context.Background(), sessionLifetime)
 	stopped := make(chan string, 1)
 	stop := func(why string) {
 		select {
@@ -191,7 +177,7 @@ func serveEcho(session *webtransport.Session, address string, budget int64, life
 
 	var echoed atomic.Int64
 	spend := func(n int) bool {
-		if echoed.Add(int64(n)) > budget {
+		if echoed.Add(int64(n)) > sessionEchoBudget {
 			stop("echo budget reached")
 			return false
 		}
@@ -346,7 +332,6 @@ func main() {
 	bindHost := flag.String("bind", "", "UDP bind host (fly-global-services on Fly; empty = all interfaces)")
 	hashDir := flag.String("hashdir", "/tmp", "directory sibling listeners publish their leaf hashes into")
 	trioPort := flag.Int("trioport", 4440, "WebTransport UDP port that also sends the flow-control trio")
-	probePort := flag.Int("probeport", 4441, "WebTransport UDP port for the flow-control probe (a 64 MiB session budget, one session per address)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*qlogDir, 0o755); err != nil {
@@ -392,11 +377,7 @@ func main() {
 	// one server and one mux per port. Upgrade is a method on a specific
 	// webtransport.Server, so the two ports cannot share a handler — the
 	// default mux would route both to whichever server registered last
-	startWT := func(port int, config *webtransport.Config, probe bool) {
-		budget, lifetime := int64(sessionEchoBudget), sessionLifetime
-		if probe {
-			budget, lifetime = probeEchoBudget, probeLifetime
-		}
+	startWT := func(port int, config *webtransport.Config) {
 		server := &webtransport.Server{
 			H3: &http3.Server{
 				Addr:      fmt.Sprintf("%s:%d", *bindHost, port),
@@ -428,7 +409,7 @@ func main() {
 			log.Printf("connect  port=%d origin=%q wt-available-protocols=%q", port, r.Header.Get("Origin"), r.Header.Get("Wt-Available-Protocols"))
 			address := addressOf(r.RemoteAddr)
 			watch.record(address, port, kindConnect, "origin="+r.Header.Get("Origin"))
-			if ok, why := limits.acquire(address, probe); !ok {
+			if ok, why := limits.acquire(address); !ok {
 				log.Printf("upgrade declined port=%d remote=%s (%s)", port, r.RemoteAddr, why)
 				watch.record(address, port, kindDeclined, why)
 				w.WriteHeader(http.StatusServiceUnavailable)
@@ -444,7 +425,7 @@ func main() {
 			}
 			log.Printf("session  accepted port=%d remote=%s", port, r.RemoteAddr)
 			watch.record(address, port, kindSession, "")
-			serveEcho(session, address, budget, lifetime)
+			serveEcho(session, address)
 		})
 		server.H3.Handler = mux
 
@@ -556,17 +537,15 @@ func main() {
 	}
 	go func() { log.Fatal(caServer.ListenAndServe()) }()
 
-	log.Printf("wt-lab boot wt=:%d,:443 trio=:%d probe=:%d page=:%d qlog=%s", *port, *trioPort, *probePort, *pagePort, *qlogDir)
+	log.Printf("wt-lab boot wt=:%d,:443 trio=:%d page=:%d qlog=%s", *port, *trioPort, *pagePort, *qlogDir)
 	log.Printf("certHash=%s notAfter=%s sans=%v keyUsage=DigitalSignature isCA=false", hash, time.Now().Add(10*24*time.Hour).Format(time.RFC3339), hosts)
 	log.Printf("one-time iPad setup: http://<host-lan-ip>:%d/ downloads the CA profile — install in Settings, then enable full trust in General > About > Certificate Trust Settings", *pagePort+1)
 	log.Printf("tap: https://<host-lan-ip>:%d/", *pagePort)
 
-	startWT(*port, nil, false)
+	startWT(*port, nil)
 	// clients that only ever try the default port are a live hypothesis, so
 	// the endpoint answers on 443/udp too
-	startWT(443, nil, false)
-	// the flow-control probe: the same echo with a budget past WebKit 319818's lines
-	startWT(*probePort, nil, true)
+	startWT(443, nil)
 	// v0.12 does not send the WebTransport flow-control trio unless asked. these
 	// are the values v0.11 hardcodes, so this port differs from the v0.11 rung
 	// by library version and nothing else. 1<<60 is exactly where the stream
@@ -575,7 +554,7 @@ func main() {
 		MaxIncomingStreams:    1 << 60,
 		MaxIncomingUniStreams: 1 << 60,
 		MaxIncomingData:       1 << 60,
-	}, false)
+	})
 	// wrapped so a PROXY header, when Fly is configured to send one, restores the
 	// client's own address. without it the page server only ever sees the proxy,
 	// and the observation lookup cannot match a session to the page that asked
