@@ -127,9 +127,16 @@ const begin = async label => {
   wt.closed.then(
     info => line(`closed: ${JSON.stringify(info)}`, 'dim'),
     error => line(`closed: ${describe(error)}`, 'bad'));
-  await wt.ready;
+  // a server that omits WT_MAX_SESSIONS makes Safari hang on ready rather than reject, so
+  // the race is load-bearing. the reliability check is the second guard behind
+  // requireUnreliable: Safari resolves ready over an http/2 fallback when udp is blocked
+  const ready = await Promise.race([wt.ready.then(() => true), wait(STALL_MS).then(() => TIMEOUT)]);
+  if (ready === TIMEOUT) throw new Error(`no answer from ${TARGET} within ${STALL_MS / 1000}s`);
   session = wt;
-  line(`ready  ${label}`, 'ok');
+  if (wt.reliability != null && wt.reliability !== 'supports-unreliable') {
+    throw new Error(`the session came up over ${wt.reliability}, not QUIC: udp to port 4441 is blocked on this network`);
+  }
+  line(`ready  ${wt.reliability ? `reliability=${wt.reliability}  ` : ''}${label}`, 'ok');
   ui.state.textContent = label;
   return wt;
 };
@@ -240,8 +247,8 @@ const echoDatagrams = async (wt, count) => {
       show(ui.datagramsBar, ui.datagramsRead, echoed, count, `${echoed}/${count}`);
     }
   })();
-  const payload = new Uint8Array(64);
   for (let i = 0; i < count && !stopped; i++) {
+    const payload = new Uint8Array(64);
     payload[0] = i & 255;
     await writer.write(payload);
   }
