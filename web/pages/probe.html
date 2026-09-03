@@ -225,8 +225,12 @@ const echoStreams = async (wt, count) => {
 
 /* unreliable by design: send them all, give the echoes a moment, and report what came back */
 const echoDatagrams = async (wt, count) => {
-  const writer = wt.datagrams.writable.getWriter();
-  const reader = wt.datagrams.readable.getReader();
+  // the specification replaced datagrams.writable with createWritable() in 2025. WebKit
+  // carries only the current shape, Chrome both
+  const { datagrams } = wt;
+  const writable = typeof datagrams.createWritable === 'function' ? datagrams.createWritable() : datagrams.writable;
+  const writer = writable.getWriter();
+  const reader = datagrams.readable.getReader();
   let echoed = 0;
   (async () => {
     for (;;) {
@@ -242,8 +246,8 @@ const echoDatagrams = async (wt, count) => {
     await writer.write(payload);
   }
   await wait(1500);
-  writer.releaseLock();
-  reader.releaseLock();
+  // the reader stays locked with a read outstanding until the session closes; releasing
+  // it mid-read is a place Streams implementations differ, and nothing else reads datagrams
   return echoed;
 };
 
