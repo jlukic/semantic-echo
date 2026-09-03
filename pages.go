@@ -60,6 +60,11 @@ var pageSpecs = map[string]struct {
 		Description: "What each engine requires of a WebTransport server, what it silently discards, and what breaks. Safari and iOS in detail, tested live against a public echo.",
 		Nav:         "compat",
 	}},
+	"/probe": {"probe.html", page{
+		Title:       "WebTransport flow-control probe",
+		Description: "Push one connection past the byte and stream counts where WebKit stops returning flow-control credit, and see where your browser stalls. A live reproduction of WebKit bug 319818.",
+		Nav:         "probe",
+	}},
 	"/references": {"references.html", page{
 		Title:       "WebTransport references and sources",
 		Description: "Primary sources for every claim on this site: specifications and drafts, WebKit and Chromium bug reports, and the measurements taken against this host.",

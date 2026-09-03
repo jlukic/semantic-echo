@@ -1,0 +1,200 @@
+{{define "content"}}
+<h2><span class="icon" style="mask-image: var(--icon-book)"></span>Flow-control probe</h2>
+
+<p class="intro">WebKit does not return flow-control credit when a WebTransport stream
+finishes (<a href="https://bugs.webkit.org/show_bug.cgi?id=319818">bug 319818</a>). A
+connection's receive window drains as bytes and streams arrive and never refills, so the
+session stalls near 16 MiB of cumulative stream data or 7,600 streams, whichever comes
+first. This page drives one connection at both lines and records where your browser
+stops. Chrome and Firefox should finish both runs; a stalled bar on Safari or iOS is the
+bug, and the number beside it is your device's line.</p>
+
+<p class="hint">The endpoint is the same echo with a 64 MiB session budget and a ten-minute
+lifetime, one session per address. Runs go through
+<code>https://echo.semantic-ui.com:4441/echo</code>. Nothing is stored server-side.</p>
+
+<h2><span class="icon" style="mask-image: var(--icon-plug)"></span>Run</h2>
+
+<div class="dialer">
+  <div class="row">
+    <button id="run-bytes" class="action primary">Bytes: one stream to 24 MiB</button>
+    <button id="run-streams" class="action">Streams: open 8,000</button>
+    <button id="stop" class="action" disabled>Stop</button>
+    <span id="state" class="hint">idle</span>
+  </div>
+
+  <div class="probe-bars">
+    <div class="probe-bar"><span class="probe-label">bytes echoed</span><progress id="bytes-bar" max="100" value="0"></progress><span id="bytes-read" class="probe-read">0 MiB</span></div>
+    <div class="probe-bar"><span class="probe-label">streams closed</span><progress id="streams-bar" max="100" value="0"></progress><span id="streams-read" class="probe-read">0</span></div>
+  </div>
+
+  <div id="log" class="log"></div>
+
+  <p class="hint budget">A run that makes no progress for eight seconds is called stalled and
+  the connection is closed. Expected on Safari and iOS 26.4 through the current build; the
+  number where it stalls is the report. Expected to finish on Chrome and Firefox.</p>
+</div>
+
+<h2><span class="icon" style="mask-image: var(--icon-terminal)"></span>What a stall means</h2>
+
+<p>The client's writes are accepted and the server echoes them, but the bytes stop arriving
+because the browser stopped telling the server it may send more. Nothing errors. The
+session's <code>closed</code> promise stays pending, keepalives keep the QUIC connection
+alive, and every stream on it is dead. An application on top of this has no signal but its
+own silence watchdog, which is why any long-lived WebTransport session on Safari needs one.
+Datagrams are unaffected: they are exempt from stream flow control by design.</p>
+
+<style>
+.probe-bars { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.probe-bar { display: grid; grid-template-columns: 120px 1fr 90px; align-items: center; gap: 12px; }
+.probe-bar progress { width: 100%; height: 10px; }
+.probe-label { font-size: 0.85em; color: var(--light-text-color); }
+.probe-read { font-variant-numeric: tabular-nums; text-align: right; font-size: 0.9em; }
+</style>
+
+<script>
+
+/* the probe drives one connection at WebKit 319818's two lines. bytes: one bidirectional
+   stream, 1 MiB writes, the echo read back and counted; the received count is what flow
+   control governs, so it is the bar. streams: open a stream, write one byte, read the echo,
+   close, repeat; each FIN is a unit of never-returned credit on the buggy engine. */
+
+const MIB = 1 << 20;
+const BYTES_TARGET = 24 * MIB;   // past the ~16 MiB line with margin, under the 64 MiB budget
+const STREAMS_TARGET = 8000;     // past the ~7,600 line
+const STALL_MS = 8000;
+const TARGET = `https://${location.hostname}:4441/echo`;
+
+const ui = {
+  bytes: document.querySelector('#run-bytes'),
+  streams: document.querySelector('#run-streams'),
+  stop: document.querySelector('#stop'),
+  state: document.querySelector('#state'),
+  bytesBar: document.querySelector('#bytes-bar'),
+  bytesRead: document.querySelector('#bytes-read'),
+  streamsBar: document.querySelector('#streams-bar'),
+  streamsRead: document.querySelector('#streams-read'),
+  log: document.querySelector('#log'),
+};
+
+const line = (text, tone = '') => {
+  const row = document.createElement('div');
+  if (tone) row.className = tone;
+  row.textContent = `${new Date().toLocaleTimeString()}  ${text}`;
+  ui.log.append(row);
+  ui.log.scrollTop = ui.log.scrollHeight;
+};
+
+const mib = bytes => `${(bytes / MIB).toFixed(1)} MiB`;
+let session = null;
+let stopped = false;
+
+const begin = async label => {
+  ui.log.textContent = '';
+  stopped = false;
+  ui.bytes.disabled = ui.streams.disabled = true;
+  ui.stop.disabled = false;
+  ui.state.textContent = `connecting`;
+  line(`connecting ${TARGET}`);
+  const wt = new WebTransport(TARGET, { requireUnreliable: true });
+  wt.closed.then(
+    info => line(`closed: ${JSON.stringify(info)}`, 'dim'),
+    error => line(`closed: ${describe(error)}`, 'bad'));
+  await wt.ready;
+  session = wt;
+  line(`ready  reliability=${wt.reliability}  ${label}`, 'ok');
+  ui.state.textContent = label;
+  return wt;
+};
+
+const finish = (verdict, tone) => {
+  ui.state.textContent = verdict;
+  line(verdict, tone);
+  try { session?.close(); } catch (error) { /* already gone */ }
+  session = null;
+  ui.bytes.disabled = ui.streams.disabled = false;
+  ui.stop.disabled = true;
+};
+
+/* a watchdog on progress, not on time: a slow link is fine, a flat line is the finding */
+const stallWatch = (read) => {
+  let last = read(); let lastAt = performance.now();
+  return () => {
+    const now = read();
+    if (now !== last) { last = now; lastAt = performance.now(); return false; }
+    return performance.now() - lastAt > STALL_MS;
+  };
+};
+
+ui.bytes.onclick = async () => {
+  try {
+    const wt = await begin('bytes');
+    const stream = await wt.createBidirectionalStream();
+    const writer = stream.writable.getWriter();
+    const reader = stream.readable.getReader();
+    const chunk = new Uint8Array(MIB);
+    let sent = 0; let received = 0;
+    const stalled = stallWatch(() => received);
+    const t0 = performance.now();
+    const pump = (async () => {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done || stopped) return;
+        received += value.byteLength;
+        ui.bytesBar.value = (received / BYTES_TARGET) * 100;
+        ui.bytesRead.textContent = mib(received);
+      }
+    })();
+    for (let i = 0; sent < BYTES_TARGET && !stopped; i++) {
+      await writer.write(chunk);
+      sent += MIB;
+      if (i % 4 === 3) line(`${mib(sent)} written, ${mib(received)} echoed, ${Math.round(performance.now() - t0)} ms`, 'dim');
+      // the echo lags the writes by the link; wait for it to catch up before calling anything a stall
+      while (received < sent - 4 * MIB && !stopped) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        if (stalled()) { finish(`STALLED with ${mib(received)} echoed of ${mib(sent)} written after ${Math.round(performance.now() - t0)} ms — the flow-control line on this engine`, 'bad'); return; }
+      }
+    }
+    const deadline = performance.now() + 30000;
+    while (received < sent && !stopped && performance.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      if (stalled()) { finish(`STALLED with ${mib(received)} echoed of ${mib(sent)} written after ${Math.round(performance.now() - t0)} ms — the flow-control line on this engine`, 'bad'); return; }
+    }
+    try { await writer.close(); } catch (error) { /* peer may have gone */ }
+    if (stopped) { finish('stopped', 'dim'); return; }
+    finish(`finished: ${mib(received)} echoed on one stream in ${Math.round(performance.now() - t0)} ms, no stall`, 'ok');
+  }
+  catch (error) { finish(`failed ${describe(error)}`, 'bad'); }
+};
+
+ui.streams.onclick = async () => {
+  try {
+    const wt = await begin('streams');
+    let closed = 0;
+    const stalled = stallWatch(() => closed);
+    const t0 = performance.now();
+    const one = new Uint8Array([1]);
+    for (let i = 0; i < STREAMS_TARGET && !stopped; i++) {
+      const opened = wt.createBidirectionalStream();
+      const stream = await Promise.race([opened, new Promise(resolve => setTimeout(() => resolve(null), STALL_MS))]);
+      if (stream === null) { finish(`STALLED opening stream ${i + 1} after ${closed} closed, ${Math.round(performance.now() - t0)} ms — the stream-count line on this engine`, 'bad'); return; }
+      const writer = stream.writable.getWriter();
+      await writer.write(one);
+      const echo = await Promise.race([stream.readable.getReader().read(), new Promise(resolve => setTimeout(() => resolve({ timeout: true }), STALL_MS))]);
+      if (echo.timeout) { finish(`STALLED waiting for stream ${i + 1}'s echo after ${closed} closed, ${Math.round(performance.now() - t0)} ms — the flow-control line on this engine`, 'bad'); return; }
+      try { await writer.close(); } catch (error) { /* peer may have gone */ }
+      closed += 1;
+      ui.streamsBar.value = (closed / STREAMS_TARGET) * 100;
+      ui.streamsRead.textContent = String(closed);
+      if (closed % 500 === 0) line(`${closed} streams closed, ${Math.round(performance.now() - t0)} ms`, 'dim');
+      if (stalled()) { finish(`STALLED at ${closed} streams after ${Math.round(performance.now() - t0)} ms`, 'bad'); return; }
+    }
+    if (stopped) { finish('stopped', 'dim'); return; }
+    finish(`finished: ${closed} streams opened and closed on one connection in ${Math.round(performance.now() - t0)} ms, no stall`, 'ok');
+  }
+  catch (error) { finish(`failed ${describe(error)}`, 'bad'); }
+};
+
+ui.stop.onclick = () => { stopped = true; finish('stopped', 'dim'); };
+</script>
+{{end}}

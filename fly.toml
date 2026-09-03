@@ -17,6 +17,18 @@ primary_region = 'iad'
   [[services.ports]]
     port = 4433
 
+# the flow-control probe: a 64 MiB session budget so one connection can cross the
+# lines where WebKit stops returning credit (bug 319818), one session per address
+[[services]]
+  protocol = 'udp'
+  internal_port = 4441
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 4441
+
 # the same endpoint on the default port, for clients that may only ever dial 443
 [[services]]
   protocol = 'udp'
