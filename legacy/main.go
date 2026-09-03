@@ -23,7 +23,6 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"math/big"
 	"net"
