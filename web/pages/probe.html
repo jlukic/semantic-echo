@@ -6,8 +6,14 @@ finishes (<a href="https://bugs.webkit.org/show_bug.cgi?id=319818">bug 319818</a
 connection's receive window drains as bytes and streams arrive and never refills, so the
 session stalls near 16 MiB of cumulative stream data or 7,600 streams, whichever comes
 first. This page drives one connection at both lines and records where your browser
-stops. Chrome and Firefox should finish both runs; a stalled bar on Safari or iOS is the
-bug, and the number beside it is your device's line.</p>
+stops.</p>
+
+<p class="hint">Start with <strong>Normal use</strong>: one stream carrying a few MiB, a
+couple of hundred short streams, and a burst of datagrams, all well under both lines. It
+should finish green on every browser, Safari included, and proves the endpoint and your
+network before the two runs that cross a line. Chrome and Firefox finish those as well. A
+red bar there on Safari or iOS is the bug, and the number beside it is your device's
+line.</p>
 
 <p class="hint">The endpoint is the same echo with a 64 MiB session budget and a ten-minute
 lifetime, one session per address. Runs go through
@@ -17,7 +23,8 @@ lifetime, one session per address. Runs go through
 
 <div class="dialer">
   <div class="row">
-    <button id="run-bytes" class="action primary">Bytes: one stream to 24 MiB</button>
+    <button id="run-normal" class="action primary">Normal use: 4 MiB, 200 streams, 100 datagrams</button>
+    <button id="run-bytes" class="action">Bytes: one stream to 24 MiB</button>
     <button id="run-streams" class="action">Streams: open 8,000</button>
     <button id="stop" class="action" disabled>Stop</button>
     <span id="state" class="hint">idle</span>
@@ -26,13 +33,14 @@ lifetime, one session per address. Runs go through
   <div class="probe-bars">
     <div class="probe-bar"><span class="probe-label">bytes echoed</span><progress id="bytes-bar" max="100" value="0"></progress><span id="bytes-read" class="probe-read">0 MiB</span></div>
     <div class="probe-bar"><span class="probe-label">streams closed</span><progress id="streams-bar" max="100" value="0"></progress><span id="streams-read" class="probe-read">0</span></div>
+    <div class="probe-bar"><span class="probe-label">datagrams echoed</span><progress id="datagrams-bar" max="100" value="0"></progress><span id="datagrams-read" class="probe-read">0</span></div>
   </div>
 
   <div id="log" class="log"></div>
 
   <p class="hint budget">A run that makes no progress for eight seconds is called stalled and
-  the connection is closed. Expected on Safari and iOS 26.4 through the current build; the
-  number where it stalls is the report. Expected to finish on Chrome and Firefox.</p>
+  the connection is closed. Datagrams are unreliable by design, so a few missing from that
+  count is the network, not a stall.</p>
 </div>
 
 <h2><span class="icon" style="mask-image: var(--icon-terminal)"></span>What a stall means</h2>
@@ -57,18 +65,23 @@ Datagrams are unaffected: they are exempt from stream flow control by design.</p
 {{define "script"}}
 <script>
 
-/* the probe drives one connection at WebKit 319818's two lines. bytes: one bidirectional
-   stream, 1 MiB writes, the echo read back and counted; the received count is what flow
-   control governs, so it is the bar. streams: open a stream, write one byte, read the echo,
-   close, repeat; each FIN is a unit of never-returned credit on the buggy engine. */
+/* the probe drives one connection at WebKit 319818's two lines, after a normal-use run that
+   stays under both. bytes: one bidirectional stream, 1 MiB writes, the echo read back and
+   counted; the received count is what flow control governs, so it is the bar. streams: open,
+   write one byte, read the echo, close, read the peer's close, repeat; every finished stream
+   is a unit of never-returned credit on the buggy engine. */
 
 const MIB = 1 << 20;
 const BYTES_TARGET = 24 * MIB;   // past the ~16 MiB line with margin, under the 64 MiB budget
 const STREAMS_TARGET = 8000;     // past the ~7,600 line
+const NORMAL = { bytes: 4 * MIB, streams: 200, datagrams: 100 };
+const STREAMS_IN_FLIGHT = 16;    // under the peer's hundred-stream credit, enough to hide the round trip
 const STALL_MS = 8000;
 const TARGET = `https://${location.hostname}:4441/echo`;
+const TIMEOUT = Symbol('timeout');
 
 const ui = {
+  normal: document.querySelector('#run-normal'),
   bytes: document.querySelector('#run-bytes'),
   streams: document.querySelector('#run-streams'),
   stop: document.querySelector('#stop'),
@@ -77,8 +90,11 @@ const ui = {
   bytesRead: document.querySelector('#bytes-read'),
   streamsBar: document.querySelector('#streams-bar'),
   streamsRead: document.querySelector('#streams-read'),
+  datagramsBar: document.querySelector('#datagrams-bar'),
+  datagramsRead: document.querySelector('#datagrams-read'),
   log: document.querySelector('#log'),
 };
+const runs = [ui.normal, ui.bytes, ui.streams];
 
 const line = (text, tone = '') => {
   const row = document.createElement('div');
@@ -89,15 +105,23 @@ const line = (text, tone = '') => {
 };
 
 const mib = bytes => `${(bytes / MIB).toFixed(1)} MiB`;
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const elapsed = t0 => `${Math.round(performance.now() - t0)} ms`;
+const show = (bar, read, value, max, text) => { bar.value = (value / max) * 100; read.textContent = text; };
+
+class Stall extends Error {}
 let session = null;
 let stopped = false;
 
 const begin = async label => {
   ui.log.textContent = '';
   stopped = false;
-  ui.bytes.disabled = ui.streams.disabled = true;
+  for (const button of runs) button.disabled = true;
   ui.stop.disabled = false;
-  ui.state.textContent = `connecting`;
+  show(ui.bytesBar, ui.bytesRead, 0, 1, '0 MiB');
+  show(ui.streamsBar, ui.streamsRead, 0, 1, '0');
+  show(ui.datagramsBar, ui.datagramsRead, 0, 1, '0');
+  ui.state.textContent = 'connecting';
   line(`connecting ${TARGET}`);
   const wt = new WebTransport(TARGET, { requireUnreliable: true });
   wt.closed.then(
@@ -105,7 +129,7 @@ const begin = async label => {
     error => line(`closed: ${describe(error)}`, 'bad'));
   await wt.ready;
   session = wt;
-  line(`ready  reliability=${wt.reliability}  ${label}`, 'ok');
+  line(`ready  ${label}`, 'ok');
   ui.state.textContent = label;
   return wt;
 };
@@ -115,7 +139,7 @@ const finish = (verdict, tone) => {
   line(verdict, tone);
   try { session?.close(); } catch (error) { /* already gone */ }
   session = null;
-  ui.bytes.disabled = ui.streams.disabled = false;
+  for (const button of runs) button.disabled = false;
   ui.stop.disabled = true;
 };
 
@@ -129,75 +153,122 @@ const stallWatch = (read) => {
   };
 };
 
-ui.bytes.onclick = async () => {
-  try {
-    const wt = await begin('bytes');
-    const stream = await wt.createBidirectionalStream();
-    const writer = stream.writable.getWriter();
-    const reader = stream.readable.getReader();
-    const chunk = new Uint8Array(MIB);
-    let sent = 0; let received = 0;
-    const stalled = stallWatch(() => received);
-    const t0 = performance.now();
-    const pump = (async () => {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done || stopped) return;
-        received += value.byteLength;
-        ui.bytesBar.value = (received / BYTES_TARGET) * 100;
-        ui.bytesRead.textContent = mib(received);
-      }
-    })();
-    for (let i = 0; sent < BYTES_TARGET && !stopped; i++) {
-      await writer.write(chunk);
-      sent += MIB;
-      if (i % 4 === 3) line(`${mib(sent)} written, ${mib(received)} echoed, ${Math.round(performance.now() - t0)} ms`, 'dim');
-      // the echo lags the writes by the link; wait for it to catch up before calling anything a stall
-      while (received < sent - 4 * MIB && !stopped) {
-        await new Promise(resolve => setTimeout(resolve, 250));
-        if (stalled()) { finish(`STALLED with ${mib(received)} echoed of ${mib(sent)} written after ${Math.round(performance.now() - t0)} ms — the flow-control line on this engine`, 'bad'); return; }
-      }
+/* one bidirectional stream, written in 1 MiB chunks until `target` bytes have come back */
+const echoBytes = async (wt, target) => {
+  const stream = await wt.createBidirectionalStream();
+  const writer = stream.writable.getWriter();
+  const reader = stream.readable.getReader();
+  const chunk = new Uint8Array(MIB);
+  let sent = 0; let received = 0;
+  const stalled = stallWatch(() => received);
+  const t0 = performance.now();
+  const stall = () => new Stall(`STALLED with ${mib(received)} echoed of ${mib(sent)} written after ${elapsed(t0)}: the flow-control line on this engine`);
+  (async () => {
+    for (;;) {
+      const { value, done } = await reader.read().catch(() => ({ done: true }));
+      if (done) return;
+      received += value.byteLength;
+      show(ui.bytesBar, ui.bytesRead, received, target, mib(received));
     }
-    const deadline = performance.now() + 30000;
-    while (received < sent && !stopped && performance.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 250));
-      if (stalled()) { finish(`STALLED with ${mib(received)} echoed of ${mib(sent)} written after ${Math.round(performance.now() - t0)} ms — the flow-control line on this engine`, 'bad'); return; }
+  })();
+  for (let i = 0; sent < target && !stopped; i++) {
+    await writer.write(chunk);
+    sent += MIB;
+    if (i % 4 === 3) line(`${mib(sent)} written, ${mib(received)} echoed, ${elapsed(t0)}`, 'dim');
+    // the echo lags the writes by the link; wait for it to catch up before calling anything a stall
+    while (received < sent - 4 * MIB && !stopped) {
+      await wait(250);
+      if (stalled()) throw stall();
     }
-    try { await writer.close(); } catch (error) { /* peer may have gone */ }
-    if (stopped) { finish('stopped', 'dim'); return; }
-    finish(`finished: ${mib(received)} echoed on one stream in ${Math.round(performance.now() - t0)} ms, no stall`, 'ok');
   }
-  catch (error) { finish(`failed ${describe(error)}`, 'bad'); }
+  const deadline = performance.now() + 30000;
+  while (received < sent && !stopped && performance.now() < deadline) {
+    await wait(250);
+    if (stalled()) throw stall();
+  }
+  try { await writer.close(); } catch (error) { /* peer may have gone */ }
+  return received;
 };
 
-ui.streams.onclick = async () => {
-  try {
-    const wt = await begin('streams');
-    let closed = 0;
-    const stalled = stallWatch(() => closed);
-    const t0 = performance.now();
-    const one = new Uint8Array([1]);
-    for (let i = 0; i < STREAMS_TARGET && !stopped; i++) {
-      const opened = wt.createBidirectionalStream();
-      const stream = await Promise.race([opened, new Promise(resolve => setTimeout(() => resolve(null), STALL_MS))]);
-      if (stream === null) { finish(`STALLED opening stream ${i + 1} after ${closed} closed, ${Math.round(performance.now() - t0)} ms — the stream-count line on this engine`, 'bad'); return; }
+/* short streams, STREAMS_IN_FLIGHT at a time on the one connection: open, write a byte, read
+   the echo, close, then read the peer's close so the stream finishes on both sides */
+const echoStreams = async (wt, count) => {
+  let opened = 0; let closed = 0;
+  const stalled = stallWatch(() => closed);
+  const t0 = performance.now();
+  const every = count >= 1000 ? 500 : 50;
+  const one = new Uint8Array([1]);
+  const step = async (promise, what, why) => {
+    const result = await Promise.race([promise, wait(STALL_MS).then(() => TIMEOUT)]);
+    if (result === TIMEOUT) throw new Stall(`STALLED ${what} after ${closed} streams closed, ${elapsed(t0)}: ${why}`);
+    return result;
+  };
+  const worker = async () => {
+    while (opened < count && !stopped) {
+      const n = ++opened;
+      const stream = await step(wt.createBidirectionalStream(), `opening stream ${n}`, 'the stream-count line on this engine');
       const writer = stream.writable.getWriter();
+      const reader = stream.readable.getReader();
       await writer.write(one);
-      const echo = await Promise.race([stream.readable.getReader().read(), new Promise(resolve => setTimeout(() => resolve({ timeout: true }), STALL_MS))]);
-      if (echo.timeout) { finish(`STALLED waiting for stream ${i + 1}'s echo after ${closed} closed, ${Math.round(performance.now() - t0)} ms — the flow-control line on this engine`, 'bad'); return; }
+      await step(reader.read(), `waiting for stream ${n}'s echo`, 'the flow-control line on this engine');
       try { await writer.close(); } catch (error) { /* peer may have gone */ }
+      await step(reader.read(), `waiting for stream ${n} to finish`, 'the peer never closed its side');
       closed += 1;
-      ui.streamsBar.value = (closed / STREAMS_TARGET) * 100;
-      ui.streamsRead.textContent = String(closed);
-      if (closed % 500 === 0) line(`${closed} streams closed, ${Math.round(performance.now() - t0)} ms`, 'dim');
-      if (stalled()) { finish(`STALLED at ${closed} streams after ${Math.round(performance.now() - t0)} ms`, 'bad'); return; }
+      show(ui.streamsBar, ui.streamsRead, closed, count, String(closed));
+      if (closed % every === 0) line(`${closed} streams closed, ${elapsed(t0)}`, 'dim');
+      if (stalled()) throw new Stall(`STALLED at ${closed} streams after ${elapsed(t0)}`);
     }
-    if (stopped) { finish('stopped', 'dim'); return; }
-    finish(`finished: ${closed} streams opened and closed on one connection in ${Math.round(performance.now() - t0)} ms, no stall`, 'ok');
-  }
-  catch (error) { finish(`failed ${describe(error)}`, 'bad'); }
+  };
+  await Promise.all(Array.from({ length: STREAMS_IN_FLIGHT }, worker));
+  return closed;
 };
 
-ui.stop.onclick = () => { stopped = true; finish('stopped', 'dim'); };
+/* unreliable by design: send them all, give the echoes a moment, and report what came back */
+const echoDatagrams = async (wt, count) => {
+  const writer = wt.datagrams.writable.getWriter();
+  const reader = wt.datagrams.readable.getReader();
+  let echoed = 0;
+  (async () => {
+    for (;;) {
+      const { done } = await reader.read().catch(() => ({ done: true }));
+      if (done) return;
+      echoed += 1;
+      show(ui.datagramsBar, ui.datagramsRead, echoed, count, `${echoed}/${count}`);
+    }
+  })();
+  const payload = new Uint8Array(64);
+  for (let i = 0; i < count && !stopped; i++) {
+    payload[0] = i & 255;
+    await writer.write(payload);
+  }
+  await wait(1500);
+  writer.releaseLock();
+  reader.releaseLock();
+  return echoed;
+};
+
+const run = (label, body) => async () => {
+  const t0 = performance.now();
+  try {
+    const wt = await begin(label);
+    const summary = await body(wt);
+    if (stopped) { finish('stopped', 'dim'); return; }
+    finish(`finished: ${summary} in ${elapsed(t0)}, no stall`, 'ok');
+  }
+  catch (error) {
+    if (stopped) { finish('stopped', 'dim'); return; }
+    finish(error instanceof Stall ? error.message : `failed ${describe(error)}`, 'bad');
+  }
+};
+
+ui.normal.onclick = run('normal use', async wt => {
+  const datagrams = await echoDatagrams(wt, NORMAL.datagrams);
+  const bytes = await echoBytes(wt, NORMAL.bytes);
+  const streams = await echoStreams(wt, NORMAL.streams);
+  return `normal use holds: ${mib(bytes)} on one stream, ${streams} streams, ${datagrams} of ${NORMAL.datagrams} datagrams echoed`;
+});
+ui.bytes.onclick = run('bytes', async wt => `${mib(await echoBytes(wt, BYTES_TARGET))} echoed on one stream`);
+ui.streams.onclick = run('streams', async wt => `${await echoStreams(wt, STREAMS_TARGET)} streams opened and closed on one connection`);
+ui.stop.onclick = () => { stopped = true; try { session?.close(); } catch (error) { /* already gone */ } };
 </script>
 {{end}}
